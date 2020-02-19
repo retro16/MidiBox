@@ -49,7 +49,7 @@ static const char *settingsPath = "/JMC_MIDI/SETTINGS/";
 HardwareSerial serial2(USART2); // TX:PA2, RX:PA3
 HardwareSerial serial3(USART3); // TX:PB10, RX:PB11
 
-typedef MidiLoopback<32> MidiBus;
+typedef MidiLoopback<16> MidiBus;
 MidiSerialPort midi1("MIDI PORT 1", serial2);
 MidiSerialPort midi2("MIDI PORT 2", serial3);
 MidiSerialMux midiMux1("MIDI EXT1 PORT 1", Serial1, 0);
@@ -64,7 +64,7 @@ MidiGpioGate gates("ANALOG GATES", PA8, PB1, PA15, PB3, PB4, PB5, PB8, PB9);
 MidiBus bus1("LOOPBACK BUS 1"); // Internal bus
 MidiBus bus2("LOOPBACK BUS 2"); // Internal bus
 MidiBus bus3("LOOPBACK BUS 3"); // Internal bus
-MidiBus bus4("LOOPBACK BUS 4"); // Internal bus
+MidiParaphonyMapper paraBus("PARAPHONIC MAP."); // Paraphonic mapper
 MidiStream *inputs[] = {
   &midi1,
   &midi2,
@@ -79,7 +79,7 @@ MidiStream *inputs[] = {
   &bus1,
   &bus2,
   &bus3,
-  &bus4
+  &paraBus
 };
 const int inputCount = sizeof(inputs)/sizeof(inputs[0]);
 MidiStream *outputs[] = {
@@ -97,7 +97,7 @@ MidiStream *outputs[] = {
   &bus1,
   &bus2,
   &bus3,
-  &bus4
+  &paraBus
 };
 const int outputCount = sizeof(outputs)/sizeof(outputs[0]);
 typedef MidiStreamMux<16> Mux;
@@ -597,6 +597,40 @@ struct MenuResetProfile: public MenuItem {
   }
 };
 
+struct MenuParaTargetChannel: public MenuNumberSelect {
+  MenuParaTargetChannel(const char *name_):
+    MenuNumberSelect(name_, *this, 1, 16) {}
+  virtual void onEnter() {
+    MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
+    number = paraBus.getNextChannel(channelMenu->number);
+  }
+  virtual MenuItem * onKeyPressed(int keys) {
+    MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
+    MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
+    paraBus.setNextChannel(channelMenu->number, number);
+    return nextMenu;
+  }
+};
+
+struct MenuParaPolyphony: public MenuNumberSelect {
+  MenuParaPolyphony(const char *name_):
+    MenuNumberSelect(name_, *this, 1, MidiParaphonyMapper::maxPoly) {}
+  virtual void onEnter() {
+    MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
+    number = paraBus.getPolyphony(channelMenu->number);
+  }
+  virtual MenuItem * onKeyPressed(int keys) {
+    MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
+    MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
+    paraBus.setPolyphony(channelMenu->number, number);
+    return nextMenu;
+  }
+};
+
+MenuParaPolyphony paraPolyphony("CHAN. POLYPHONY");
+MenuParaTargetChannel paraTargetChannel("NEXT CHANNEL");
+MenuList paraSettings("PARA. SETTINGS", paraPolyphony, paraTargetChannel);
+MenuNumberSelect connectionsParaChannel("PARA. CHANNEL", paraSettings, 0, 16);
 MenuPanic menuPanic("ALL NOTES OFF");
 MenuResetProfile menuResetProfile("RESET PROFILE");
 MenuSaveSettings menuSaveSettings("SAVE PROFILE");
@@ -619,7 +653,7 @@ MenuOutputRoute connectionsOutputMenu("OUTPUT", outputs, outputCount);
 MenuList connectionsSetupMenu("ROUTE SETUP", connectionsOutputMenu, connectionsFilterMenu, connectionsSyncDivider, connectionsChannelProcessing, resetChannelProcessing, resetRouteMenu);
 MenuNumberSelect connectionsRouteMenu("ROUTE", connectionsSetupMenu, 1, routeCount);
 MenuStreamSelect connectionsMenu("CONNECTIONS", connectionsRouteMenu, inputs, inputCount);
-MenuList mainMenu("MAIN MENU", connectionsMenu, menuSaveSettings, sysExRecordPort, sysExReplayPort, menuResetProfile, menuPanic);
+MenuList mainMenu("MAIN MENU", connectionsMenu, connectionsParaChannel, menuSaveSettings, sysExRecordPort, sysExReplayPort, menuResetProfile, menuPanic);
 MenuProfileSelector profileSelector("DOWN FOR MENU", mainMenu);
 Menu menu(profileSelector, PB12, PB13, PB14, PB15);
 
@@ -663,6 +697,16 @@ void saveSettings(File *file) {
       }
     }
   }
+
+  file->println("");
+  for(int c = 1; c < 16; ++c) {
+    file->print("PARA_CHANNEL:");
+    file->println(c);
+    file->print("  POLYPHONY:");
+    file->println(paraBus.getPolyphony(c));
+    file->print("  NEXT_CHANNEL:");
+    file->println(paraBus.getNextChannel(c));
+  }
 }
 
 int getInputStreamIndex(const char *name) {
@@ -692,6 +736,7 @@ void loadSettings(File *file) {
   int from = -1;
   int route = -1;
   int channel = -1;
+  int paraChannel = -1;
   MidiStream *to = NULL;
   Mux *mux = NULL;
   resetMux();
@@ -754,6 +799,12 @@ void loadSettings(File *file) {
       if(mux && channel > 0) {
         mux->setVelocityOffset(channel, value.toInt());
       }
+    } else if(key == "PARA_CHANNEL") {
+      paraChannel = value.toInt();
+    } else if(key == "POLYPHONY") {
+      paraBus.setPolyphony(paraChannel, value.toInt());
+    } else if(key == "NEXT_CHANNEL") {
+      paraBus.setNextChannel(paraChannel, value.toInt());
     }
   }
 }

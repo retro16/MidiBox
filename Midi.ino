@@ -255,6 +255,132 @@ MidiStream *MidiStream::getStreamByName(const char *name) {
 MidiStream *MidiStream::streams[MidiStream::maxStreams];
 int MidiStream::count = 0;
 
+MidiParaphonyMapper::MidiParaphonyMapper(const char *name_): MidiStream(name_) {}
+
+void MidiParaphonyMapper::init() {
+  // By default, set polyphony to maximum and disable paraphony chain
+  // by looping each channel on itself
+  for(int c = 0; c < 16; ++c) {
+    polyphony[c] = maxPoly;
+    nextChannel[c] = c;
+  }
+  resetNotes();
+}
+
+void MidiParaphonyMapper::resetNotes() {
+  for(int c = 0; c < 16; ++c) {
+    polyphony[c] = maxPoly;
+    nextChannel[c] = c;
+    for(int p = 0; p < maxPoly; ++p)
+      currentNote[c][p] = -1;
+  }
+  streamPos = 0;
+}
+
+int MidiParaphonyMapper::findNoteSlot(char channel, int poly, char note) {
+  for(int p = 0; p < poly; ++p) {
+    if(currentNote[channel][p] == note)
+      return p;
+  }
+  return -1;
+}
+
+void MidiParaphonyMapper::noteOn(char channel, char note, char velocity) {
+  int processedChannelMask = 0;
+
+  while(!(processedChannelMask & (1 << channel))) {
+    processedChannelMask |= (1 << channel);
+    int slot = findNoteSlot(channel, polyphony[channel], -1);
+    if(slot != -1) {
+      // Slot found: declare the note as playing
+      currentNote[channel][slot] = note;
+
+      // Send note on to the channel
+      buf.write(MIDI_NOTE_ON | channel);
+      buf.write(note);
+      buf.write(velocity);
+      return;
+    }
+    channel = nextChannel[channel];
+  }
+
+  // Note is lost, don't send it anywhere
+}
+
+void MidiParaphonyMapper::noteOff(char channel, char note) {
+  int processedChannelMask = 0;
+
+  while(!(processedChannelMask & (1 << channel))) {
+    processedChannelMask |= (1 << channel);
+    int slot = findNoteSlot(channel, polyphony[channel], note);
+    if(slot != -1) {
+      // Slot found: cancel the currently playing note
+      currentNote[channel][slot] = -1;
+
+      // Send note off to the channel
+      buf.write(MIDI_NOTE_OFF | channel);
+      buf.write(note);
+      buf.write(0);
+      return;
+    }
+    channel = nextChannel[channel];
+  }
+
+  // Note was lost, don't do anything
+}
+
+void MidiParaphonyMapper::allNotesOff() {
+  for(char c = 0; c < 16; ++c) {
+    for(int p = 0; p < polyphony[c]; ++p) {
+      if(currentNote[c][p] != -1) {
+        // Reset note state to off
+        currentNote[c][p] = -1;
+
+        // Note playing: send note off
+        buf.write(MIDI_NOTE_OFF | c);
+        buf.write(currentNote[c][p]);
+        buf.write(0);
+      }
+    }
+  }
+}
+
+void MidiParaphonyMapper::write(byte b) {
+  if(b & 0x80) {
+    byte msg = b & 0xF0;
+    if(b == MIDI_CTL || b == MIDI_NOTE_ON || b == MIDI_NOTE_OFF) {
+      streamDec[0] = b;
+      streamPos = 1;
+    } else {
+      // Unknown message: pass through
+      streamPos = 0;
+      buf.write(b);
+    }
+  } else if(streamPos == 2) {
+    // Complete message
+    char velocity = 0;
+    switch(streamDec[0] & 0xF0) {
+      case MIDI_NOTE_ON:
+        velocity = b;
+      case MIDI_NOTE_OFF:
+        if(!velocity)
+          noteOff(streamDec[0] & 0x0F, streamDec[1]);
+        else
+          noteOn(streamDec[0] & 0x0F, streamDec[1], b);
+        break;
+      case MIDI_CTL:
+        if(streamDec[1] == 123)
+          allNotesOff();
+        break;
+    }
+  } else if(streamPos > 0) {
+    streamDec[streamPos] = b;
+  } else {
+    // Unknown message: pass through
+    buf.write(b);
+  }
+}
+
 void MidiSerialMux::dispatch() {
   // Read hardware serial and dispatch to input buffers
   while(port.serial->available()) {

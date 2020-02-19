@@ -301,7 +301,7 @@ public:
   void write(byte b) {
     buf.write(b);
   }
-  
+
 protected:
 
   byte linkRead() {
@@ -313,6 +313,78 @@ protected:
 
 private:
   MidiBuffer<size> buf;
+};
+
+struct MidiParaphonyMapper: public MidiStream {
+public:
+  static const int maxPoly = 16; // Maximum allowable polyphony per channel
+
+  MidiParaphonyMapper(const char *name_);
+
+  int available() {
+    return buf.available();
+  }
+
+  int availableForWrite() {
+    // Reserve some room because writing a single byte can fill the buffer with
+    // up to 3 bytes if it triggers a note
+    return buf.availableForWrite() - 2;
+  }
+
+  byte read() {
+    return buf.read();
+  }
+
+  void write(byte b);
+
+  void resetNotes();
+
+  int getPolyphony(int channel) {
+    if(channel > 0 && channel <= 16)
+      return polyphony[channel - 1];
+    return 0;
+  }
+
+  void setPolyphony(int channel, int newPoly) {
+    if(channel > 0 && channel <= 16 && newPoly > 0 && newPoly <= maxPoly)
+      polyphony[channel - 1] = newPoly;
+  }
+
+  int getNextChannel(int channel) {
+    if(channel > 0 && channel <= 16)
+      return nextChannel[channel - 1];
+    return 0;
+  }
+
+  void setNextChannel(int channel, int newNextChannel) {
+    if(channel > 0 && channel <= 16 && newNextChannel > 0 && newNextChannel <= maxPoly)
+      nextChannel[channel - 1] = newNextChannel;
+  }
+
+  void init();
+
+protected:
+
+  byte linkRead() {
+    return 0;
+  }
+
+  void linkWrite(byte) {
+  }
+
+private:
+  char polyphony[16]; // Polyphony of each channel
+  char nextChannel[16]; // Next channel that offloads notes for each channel
+  char streamDec[2]; // Used for MIDI stream decoding
+  char streamPos; // Position inside streamDec
+  char currentNote[16][maxPoly]; // -1 if not playing
+  MidiBuffer<3*maxPoly> buf; // Reserve enough buffer
+
+  int findNoteSlot(char channel, int poly, char note);
+  void noteOn(char channel, char note, char velocity);
+  void noteOff(char channel, char note);
+  void allNotesOff();
+
 };
 
 struct MidiSerialPort: public MidiStream {
@@ -439,6 +511,7 @@ protected:
   }
 
   void linkWrite(byte b) {
+    // TODO: implement MIDI CC 123 (all notes off)
     for(int i = 0; i < maxNotes; ++i) {
       auto & map = noteMapping[i];
       if(writtenMessage == map.noteOn || writtenMessage == map.noteOff) {
