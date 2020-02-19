@@ -23,6 +23,9 @@ It provides many features for its size and cost, including:
    (SYX files)
  * Per-route MIDI clock divider
    (reduces the tempo for that particular output or bus)
+ * Paraphonic mapper: dispatch simultaneous notes coming from a single channel
+   on multiple synths (multiple channels) in real time. Allows combining
+   multiple similar synths together to increase their polyphony.
  * SD and LCD are optional. By default, all traffic is routed to a single output
    so it acts as a MIDI merge box with no interface.
 
@@ -170,7 +173,7 @@ Detailed schematic of channel processing:
 
 Note: Enabling channel processing increases CPU usage and may introduce a lag
 if used on too many routes at the same time. For best performance, use the
-DISABLE entry in the channel processing menu that will skip all processing
+RESET CH. PROCESS entry in the route menu: that will skip all processing
 features in a very efficient way.
 
 Loopback busses
@@ -192,6 +195,54 @@ MIDI ports together.
 
 Loopback busses increase latency, but not as much as a hardware port.
 
+Paraphonic mapping loopback bus
+===============================
+
+This bus is a special kind of bus. It allows paraphonic operation of multiple
+synthesizers by remapping MIDI channels in real time.
+
+Example: you have a monophonic synth on channel 1, and a 6-voice polyphony
+synth on channel 2 of the same port. All of them emit a similar sound.
+
+ * Route the keyboard to the channel 1 of the paraphonic mapper.
+ * Go to the paraphonic mapping configuration
+ * Configure channel 1
+ * Set polyphony to 1 (because your first synth is monophonic)
+ * Set next channel to 2 (because your second synth is on channel 2)
+ * Configure channel 2
+ * Set polyphony to 6 (because your second synth is monophonic)
+ * Set next channel to 2 (it terminates the chain)
+
+If the channels of your various synths differ, you can use channel processing
+to remap channels in the CONNECTIONS menu.
+
+Now, playing a single note will play on the channel 1 and extra polyphony will
+be dispatched to channel 2.
+
+Notes:
+
+ * You can chain more than 2 synths by setting "next channel" accordingly.
+   The only limit is the number of MIDI channels available (16).
+ 
+ * You can send notes on a channel in the middle of the channel list.
+
+ * If you organize the channel list in a loop, the program will cycle all
+   channels until it finds a channel it has already processed. You can abuse
+   this behavior to set various priorities and fallbacks for different event
+   sources.
+
+ * If you need more than 1 synth ensemble, just use independent mappings for
+   different channel spans. Use channel mapping at your advantage.
+
+ * Paraphonic mapping bus latency is higher because it needs to wait for the
+   whole MIDI "note on" to be received before routing it. It triples latency.
+
+ * The paraphonic mapping bus responds to MIDI CC 123 "all notes off" messages
+   properly.
+
+ * This feature can probably be abused for more creative purposes, especially
+   when combined with channel processing. Try things, be creative !
+
 Menu
 ====
 
@@ -202,8 +253,8 @@ Menu
        * ROUTE <ROUTE>: Each input can be routed to multiple outputs or busses.
          Select the route here.
          * OUTPUT <OUTPUT>: Select the output port to which data will be routed.
-         * ROUTE FILTER: Allow to filter data per-channel or filter special MIDI
-           messages.
+         * ROUTE FILTER: Allow to filter data per-channel or filter special
+          MIDI messages.
            * ENABLE ALL: Allow all types of messages through this route.
            * DISABLE ALL: Block all types of messages through this route.
            * CHANNEL n / MIDI message type: Press down to pass (mark) or block
@@ -225,11 +276,19 @@ Menu
          * RESET CH.PROCESS: Reset all channel processing. Channel processing
            will be bypassed, reducing CPU load.
          * RESET ROUTE: Reset all settings for this route.
+     * PARA. CHANNEL <CHANNEL>: Configure paraphonic mapping for the given MIDI
+       channel of the paraphonic bus.
+         * CHAN. POLYPHONY: Set the maximum polyphony for this channel. All
+           notes that play beyond that amount of polyphony will be routed to
+           "NEXT CHANNEL".
+         * NEXT CHANNEL: Notes that exceed the maximum polyphony of the channel
+           will be routed to this channel (or to its next channel if it's also
+           full, etc...)
+     * SAVE PROFILE: Save the current profile to the SD card.
      * REPLAY TO <OUTPUT> <FILE>: Send a SYX file to the selected output.
      * RECORD FROM <INPUT>: Create a file named RECORDnn.SYX (nn is an
        incremented number) and record all SysEx messages coming from the
        selected input into it.
-     * SAVE PROFILE: Save the current profile to the SD card.
      * RESET PROFILE: Set the current profile to default values (it's not saved
        on the SD card).
      * ALL NOTES OFF: Send the MIDI CC 123 ("all notes off") to all outputs.
