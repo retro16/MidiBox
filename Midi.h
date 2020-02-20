@@ -92,7 +92,7 @@ struct MidiBuffer {
 
 struct MidiStream {
 public:
-  static const int maxStreams = 64;
+  static const int maxStreams = 70;
   MidiStream();
   MidiStream(const char *name);
 
@@ -231,7 +231,7 @@ struct MidiStreamMux: public MidiStream {
   }
 
   virtual int availableForWrite() {
-    return stream ? (buf.availableForWrite() + stream->availableForWrite()) : 0;
+    return stream ? (buf.availableForWrite() + stream->availableForWrite() > 1) : 0;
   }
   MidiStream *stream = NULL;
 protected:
@@ -249,9 +249,9 @@ protected:
       // FIXME: Need a timeout for ownership
       stream->currentWriter = this;
     }
-    while(buf.available() && stream->availableForWrite())
+    while(buf.available() && stream->availableForWrite() > 1)
       stream->write(buf.read());
-    if(stream->availableForWrite())
+    if(stream->availableForWrite() > 1)
       stream->write(b);
     else
       buf.write(b);
@@ -352,13 +352,13 @@ public:
 
   int getNextChannel(int channel) {
     if(channel > 0 && channel <= 16)
-      return nextChannel[channel - 1];
+      return nextChannel[channel - 1] + 1;
     return 0;
   }
 
   void setNextChannel(int channel, int newNextChannel) {
     if(channel > 0 && channel <= 16 && newNextChannel > 0 && newNextChannel <= maxPoly)
-      nextChannel[channel - 1] = newNextChannel;
+      nextChannel[channel - 1] = newNextChannel - 1;
   }
 
   void init();
@@ -388,7 +388,7 @@ private:
 };
 
 struct MidiSerialPort: public MidiStream {
-  MidiSerialPort(const char *name_, HardwareSerial &serial_): MidiStream(name_), serial(serial_) {
+  MidiSerialPort(const char *name_, HardwareSerial &serial_): MidiStream(name_), serial(serial_), lastSentMessage(0) {
   }
 
   void init() {
@@ -410,11 +410,20 @@ protected:
   }
 
   void linkWrite(byte b) {
-    serial.write(b);
+    // Optimize the stream by omitting redundant events
+Serial.print((int)b, HEX);
+Serial.print('-');
+Serial.println((int)lastSentMessage, HEX);
+    if(b != lastSentMessage) {
+      lastSentMessage = writtenMessage;
+      serial.write(b);
+Serial.println("s");
+    }
   }
 
 private:
   HardwareSerial &serial;
+  byte lastSentMessage;
 };
 
 // Midi port multiplexer

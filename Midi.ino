@@ -63,6 +63,13 @@ void MidiStream::write(byte b) {
       writeRemainingBytes = 0;
     }
   } else {
+    // Regenerate an event byte if chaining events
+    // That helps splitting and processing
+    if(writeRemainingBytes == 0 && (writtenMessage & 0xF0) != 0xF0) {
+      write(writtenMessage);
+    }
+
+    // Handle channel processing
     if(processing && ((writtenMessage & 0xF0) == MIDI_NOTE_ON) || ((writtenMessage & 0xF0) == MIDI_NOTE_OFF)) {
       int channel = (writtenMessage & 0x0F);
       if(writeRemainingBytes == 2) {
@@ -228,7 +235,7 @@ MidiStream::MidiStream(): name("?") {
   registerStream();
 }
 
-MidiStream::MidiStream(const char *name_): name(name_) {
+MidiStream::MidiStream(const char *name_): name(name_), writtenMessage(0) {
   reset();
   registerStream();
 }

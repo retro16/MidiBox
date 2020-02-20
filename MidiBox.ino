@@ -78,8 +78,8 @@ MidiStream *inputs[] = {
   &midiMux8,
   &bus1,
   &bus2,
-  &bus3,
-  &paraBus
+  &bus3/*,
+  &paraBus*/
 };
 const int inputCount = sizeof(inputs)/sizeof(inputs[0]);
 MidiStream *outputs[] = {
@@ -96,11 +96,11 @@ MidiStream *outputs[] = {
   &gates,
   &bus1,
   &bus2,
-  &bus3,
-  &paraBus
+  &bus3/*,
+  &paraBus*/
 };
 const int outputCount = sizeof(outputs)/sizeof(outputs[0]);
-typedef MidiStreamMux<16> Mux;
+typedef MidiStreamMux<32> Mux;
 
 // Each input can be routed to a fixed number of outputs
 Mux routingMatrix[inputCount][3];
@@ -630,7 +630,7 @@ struct MenuParaPolyphony: public MenuNumberSelect {
 MenuParaPolyphony paraPolyphony("CHAN. POLYPHONY");
 MenuParaTargetChannel paraTargetChannel("NEXT CHANNEL");
 MenuList paraSettings("PARA. SETTINGS", paraPolyphony, paraTargetChannel);
-MenuNumberSelect connectionsParaChannel("PARA. CHANNEL", paraSettings, 0, 16);
+MenuNumberSelect connectionsParaChannel("PARA. CHANNEL", paraSettings, 1, 16);
 MenuPanic menuPanic("ALL NOTES OFF");
 MenuResetProfile menuResetProfile("RESET PROFILE");
 MenuSaveSettings menuSaveSettings("SAVE PROFILE");
@@ -700,6 +700,7 @@ void saveSettings(File *file) {
 
   file->println("");
   for(int c = 1; c < 16; ++c) {
+    file->println("");
     file->print("PARA_CHANNEL:");
     file->println(c);
     file->print("  POLYPHONY:");
@@ -728,6 +729,7 @@ void resetMux() {
         routingMatrix[i][r].filter = 0;
     }
   }
+  paraBus.init();
 }
 
 void loadSettings(File *file) {
@@ -972,24 +974,29 @@ void routeRepeater() {
   }
 }
 
+int repeaterMillis = 0;
+int repeaterPhase = 0;
+
 // Multiplexers
 void setup() {
+  Serial.begin(9600);
+  
   // Detect if repeater mode is enabled or not
   pinMode(PA1, INPUT_PULLUP);
   pinMode(PA0, INPUT_PULLUP);
   pinMode(PB14, INPUT_PULLUP);
-  digitalWrite(PB14, 0);
   digitalWrite(PB15, 0);
   pinMode(PB15, OUTPUT);
-  delay(1);
+  delay(10);
   if(!digitalRead(PB14)) {
+    digitalWrite(PB14, 0);
     pinMode(PB14, OUTPUT);
     pinMode(PB15, INPUT_PULLUP);
-    delay(1);
+    delay(10);
     if(!digitalRead(PB14)) {
       pinMode(PB14, INPUT_PULLUP);
       pinMode(PB15, INPUT_PULLUP);
-      delay(1);
+      delay(10);
       if(digitalRead(PB14) && digitalRead(PB15)) {
         repeater = digitalRead(PA1) ? 3 : 1;
         if(digitalRead(PA0))
@@ -997,13 +1004,15 @@ void setup() {
       }
     }
   }
-  pinMode(PB14, INPUT);
-  pinMode(PB15, INPUT);
   
   MidiStream::setupAll();
   if(!repeater) {
     resetMux();
     menu.init();
+  } else {
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, 0);
+    repeaterMillis = millis();
   }
 }
 
@@ -1013,5 +1022,17 @@ void loop() {
     routeMidi();
   } else {
     routeRepeater();
+    while(millis() - repeaterMillis >= 100) {
+      if(repeaterPhase & 1) {
+        digitalWrite(LED_BUILTIN, 1);
+      } else {
+        digitalWrite(LED_BUILTIN, repeaterPhase / 2 >= repeater);
+      }
+      if(repeaterPhase == 10)
+        repeaterPhase = 0;
+      else
+        ++repeaterPhase;
+      repeaterMillis += 100;
+    }
   }
 }
