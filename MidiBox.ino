@@ -37,89 +37,140 @@ PB15: RIGHT
 PC13: LED
 */
 
+// Compile-time settings
+#define MIDIBOX_VERSION "1.0"
+#define MIDIBOX_USB_SERIAL 1
+#define MIDIBOX_USB_MIDI 1
+#define MIDIBOX_EXT_COUNT 4
+#define MIDIBOX_GATES 1
+
+// Includes
+#include <USBComposite.h>
 #include "Midi.h"
 #include "Menu.h"
 
 // Settings and globals
 
+#if MIDIBOX_USB_SERIAL || MIDIBOX_USB_MIDI
+#define MIDIBOX_USB 1
+#endif
+
 static const int SD_CS = PA4;
 static const char *sysExPath = "/JMC_MIDI/SYSEX/";
 static const char *settingsPath = "/JMC_MIDI/SETTINGS/";
 
-HardwareSerial serial2(USART2); // TX:PA2, RX:PA3
-HardwareSerial serial3(USART3); // TX:PB10, RX:PB11
-
-typedef MidiLoopback<16> MidiBus;
-MidiSerialPort midi1("MIDI PORT 1", serial2);
-MidiSerialPort midi2("MIDI PORT 2", serial3);
-MidiSerialMux midiMux1("MIDI EXT1 PORT 1", Serial1, 0);
-MidiSerialMux midiMux2("MIDI EXT1 PORT 2", Serial1, 1);
-MidiSerialMux midiMux3("MIDI EXT2 PORT 1", Serial1, 2);
-MidiSerialMux midiMux4("MIDI EXT2 PORT 2", Serial1, 3);
-MidiSerialMux midiMux5("MIDI EXT3 PORT 1", Serial1, 4);
-MidiSerialMux midiMux6("MIDI EXT3 PORT 2", Serial1, 5);
-MidiSerialMux midiMux7("MIDI EXT4 PORT 1", Serial1, 6);
-MidiSerialMux midiMux8("MIDI EXT4 PORT 2", Serial1, 7);
-MidiGpioGate gates("ANALOG GATES", PA8, PB1, PA15, PB3, PB4, PB5, PB8, PB9);
-MidiBus bus1("LOOPBACK BUS 1"); // Internal bus
-MidiBus bus2("LOOPBACK BUS 2"); // Internal bus
-MidiBus bus3("LOOPBACK BUS 3"); // Internal bus
+MidiSerialPort midi1("MIDI IN 1", "MIDI OUT 1", Serial2);
+MidiSerialPort midi2("MIDI IN 2", "MIDI OUT 2", Serial3);
+MidiSerialMux serialMux(Serial1);
+#if MIDIBOX_EXT_COUNT >= 1
+MidiSerialMuxPort midiMux1("EXT1 MIDI IN 1", "EXT1 MIDI OUT 1", serialMux, 0);
+MidiSerialMuxPort midiMux2("EXT1 MIDI IN 2", "EXT1 MIDI OUT 2", serialMux, 1);
+#endif
+#if MIDIBOX_EXT_COUNT >= 2
+MidiSerialMuxPort midiMux3("EXT2 MIDI IN 3", "EXT2 MIDI OUT 3", serialMux, 2);
+MidiSerialMuxPort midiMux4("EXT2 MIDI IN 4", "EXT2 MIDI OUT 4", serialMux, 3);
+#endif
+#if MIDIBOX_EXT_COUNT >= 3
+MidiSerialMuxPort midiMux5("EXT3 MIDI IN 5", "EXT3 MIDI OUT 5", serialMux, 4);
+MidiSerialMuxPort midiMux6("EXT3 MIDI IN 6", "EXT3 MIDI OUT 6", serialMux, 5);
+#endif
+#if MIDIBOX_EXT_COUNT >= 4
+MidiSerialMuxPort midiMux7("EXT4 MIDI IN 7", "EXT4 MIDI OUT 7", serialMux, 6);
+MidiSerialMuxPort midiMux8("EXT4 MIDI IN 8", "EXT4 MIDI OUT 8", serialMux, 7);
+#endif
+#if MIDIBOX_USB_MIDI
+MidiUSBPort usb1("USB PORT", "USB PORT", 0); // USB-MIDI interface
+#endif
+MidiLoopback bus1("LOOPBACK BUS 1"); // Internal bus
+MidiLoopback bus2("LOOPBACK BUS 2"); // Internal bus
 MidiParaphonyMapper paraBus("PARAPHONIC MAP."); // Paraphonic mapper
-MidiStream *inputs[] = {
+#if MIDIBOX_GATES
+MidiGpioGate gates("ANALOG GATES", PA8, PB1, PA15, PB3, PB4, PB5, PB8, PB9);
+#endif
+MidiIn *inputs[] = {
   &midi1,
   &midi2,
+#if MIDIBOX_EXT_COUNT >= 1
   &midiMux1,
   &midiMux2,
+#endif
+#if MIDIBOX_EXT_COUNT >= 2
   &midiMux3,
   &midiMux4,
+#endif
+#if MIDIBOX_EXT_COUNT >= 3
   &midiMux5,
   &midiMux6,
+#endif
+#if MIDIBOX_EXT_COUNT >= 4
   &midiMux7,
   &midiMux8,
+#endif
+#if MIDIBOX_USB_MIDI
+  &usb1,
+#endif
   &bus1,
   &bus2,
-  &bus3/*,
-  &paraBus*/
+  &paraBus
 };
 const int inputCount = sizeof(inputs)/sizeof(inputs[0]);
-MidiStream *outputs[] = {
+const int repeaterInputCount = 10;
+MidiOut *outputs[] = {
   &midi1,
   &midi2,
+#if MIDIBOX_EXT_COUNT >= 1
   &midiMux1,
   &midiMux2,
+#endif
+#if MIDIBOX_EXT_COUNT >= 2
   &midiMux3,
   &midiMux4,
+#endif
+#if MIDIBOX_EXT_COUNT >= 3
   &midiMux5,
   &midiMux6,
+#endif
+#if MIDIBOX_EXT_COUNT >= 4
   &midiMux7,
   &midiMux8,
-  &gates,
+#endif
+#if MIDIBOX_USB_MIDI
+  &usb1,
+#endif
   &bus1,
   &bus2,
-  &bus3/*,
-  &paraBus*/
+#if MIDIBOX_GATES
+  &gates,
+#endif
+  &paraBus
 };
 const int outputCount = sizeof(outputs)/sizeof(outputs[0]);
-typedef MidiStreamMux<32> Mux;
+#if MIDIBOX_EXT_COUNT
+const int repeaterOutputCount = (MIDIBOX_EXT_COUNT) + 2;
+#endif
 
-// Each input can be routed to a fixed number of outputs
-Mux routingMatrix[inputCount][3];
-const int routeCount = sizeof(routingMatrix[0]) / sizeof(routingMatrix[0][0]);
-
-MidiStream *sysExSource = NULL;
-MidiStream *sysExTarget = NULL;
-
+// Global variables
+MidiIn *sysExSource = NULL;
+MidiOut *sysExTarget = NULL;
 char currentProfile = 1;
-char repeater = 0; 
+#if MIDIBOX_EXT_COUNT
+char repeater = 0;
+#endif
+int pollMillis = 0;
+int blinkPhase = 0;
 
-void resetRoute(Mux &route) {
-  route.reset();
-  route.stream = outputs[0];
-}
+#if MIDIBOX_USB_SERIAL
+// USB serial for firmware and configuration upload
+USBCompositeSerial usbSerial;
+#endif
 
-// Select a MIDI input from the list of inputs
+// Global functions
+void routeMidi();
+
+// Select a MIDI input or output
+template<typename StreamType>
 struct MenuStreamSelect: public MenuItem {
-  MenuStreamSelect(const char *name_, MenuItem &subMenu_, MidiStream **streams_, int streamCount_):
+  MenuStreamSelect(const char *name_, MenuItem &subMenu_, StreamType **streams_, int streamCount_):
     MenuItem(name_),
     subMenu(subMenu_),
     streams(streams_),
@@ -143,7 +194,7 @@ struct MenuStreamSelect: public MenuItem {
     return this;
   }
   MenuItem &subMenu;
-  MidiStream **streams;
+  StreamType **streams;
   int streamCount;
   int stream;
 };
@@ -252,15 +303,7 @@ struct MenuProfileSelector: public MenuNumberSelect {
   virtual void onEnter() {
     number = currentProfile;
     l2[8] = '0' + currentProfile;
-    if(SD.begin(SD_CS)) {
-      File f = SD.open(getSettingsPath());
-      if(f)
-        loadSettings(&f);
-      else
-        resetMux();
-      f.close();
-      SD.end();
-    }
+    loadSettings();
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
@@ -275,26 +318,18 @@ struct MenuProfileSelector: public MenuNumberSelect {
   char l2[17];
 };
 
-struct MenuSaveSettings: public MenuItem {
-  MenuSaveSettings(const char *name_): MenuItem(name_) {}
-  virtual const char * line2() {
-    return "DOWN TO SAVE";
-  }
-  virtual MenuItem * onKeyPressed(int keys) {
-    if(keys == Menu::KEY_DOWN) {
-      if(SD.begin(SD_CS)) {
-        SD.mkdir(settingsPath);
-        SD.remove(getSettingsPath());
-        File f = SD.open(getSettingsPath(), FILE_WRITE);
-        if(f)
-          saveSettings(&f);
-        f.close();
-        SD.end();
-      }
-      return parent;
+struct MenuSaveSettings: public MenuConfirm {
+  MenuSaveSettings(const char *name_): MenuConfirm(name_, "DOWN TO SAVE") {}
+  virtual void onConfirmed() {
+    if(SD.begin(SD_CS)) {
+      SD.mkdir(settingsPath);
+      SD.remove(getSettingsPath());
+      File f = SD.open(getSettingsPath(), FILE_WRITE);
+      if(f)
+        saveSettings(&f);
+      f.close();
+      SD.end();
     }
-
-    return NULL;
   }
 };
 
@@ -303,16 +338,16 @@ struct MenuSyncDivider: public MenuNumberSelect {
     MenuNumberSelect(name_, *this, 1, 64) {}
   virtual void onEnter() {
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-    number = stream.syncDivider;
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    number = stream.getSyncDivider();
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-    stream.syncDivider = number;
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    stream.setSyncDivider(number);
     return nextMenu;
   }
 };
@@ -323,16 +358,16 @@ struct MenuChannelMap: public MenuNumberSelect {
   virtual void onEnter() {
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     number = stream.getChannelMapping(channelMenu->number);
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     stream.setChannelMapping(channelMenu->number, number);
     return nextMenu;
   }
@@ -344,16 +379,16 @@ struct MenuTranspose: public MenuNumberSelect {
   virtual void onEnter() {
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     number = stream.getTransposition(channelMenu->number);
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     stream.transpose(channelMenu->number, number);
     return nextMenu;
   }
@@ -365,16 +400,16 @@ struct MenuVelocityScale: public MenuNumberSelect {
   virtual void onEnter() {
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     number = stream.getVelocityScale(channelMenu->number);
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     stream.setVelocityScale(channelMenu->number, number);
     return nextMenu;
   }
@@ -386,16 +421,16 @@ struct MenuVelocityOffset: public MenuNumberSelect {
   virtual void onEnter() {
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     number = stream.getVelocityOffset(channelMenu->number);
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuNumberSelect::onKeyPressed(keys);
     MenuNumberSelect *channelMenu = (MenuNumberSelect *)(parent->parent);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(channelMenu->parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
     stream.setVelocityOffset(channelMenu->number, number);
     return nextMenu;
   }
@@ -406,28 +441,28 @@ struct MenuChannelFilter: public MenuFilterEdit {
   virtual void onEnter() {
     MenuFilterEdit::onEnter();
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-    mask = stream.filter.getMask();
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    mask = stream.getFilter();
   }
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuFilterEdit::onKeyPressed(keys);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    MidiStream &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-    stream.filter = mask;
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    stream.setFilter(mask);
     return nextMenu;
   }
 };
 
-struct MenuOutputRoute: public MenuStreamSelect {
-  MenuOutputRoute(const char *name_, MidiStream **streams_, int streamCount_): MenuStreamSelect(name_, *this, streams_, streamCount_) {}
+struct MenuOutputRoute: public MenuStreamSelect<MidiOut> {
+  MenuOutputRoute(const char *name_): MenuStreamSelect(name_, *this, outputs, outputCount) {}
   virtual void onEnter() {
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    Mux &mux = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-    for(stream = 0; stream < streamCount; ++stream) {
-      if(mux.stream == streams[stream])
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &mux = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    for(stream = 0; stream < outputCount; ++stream) {
+      if(mux.out == outputs[stream])
         return;
     }
     stream = 0;
@@ -435,19 +470,19 @@ struct MenuOutputRoute: public MenuStreamSelect {
   virtual MenuItem * onKeyPressed(int keys) {
     MenuItem *nextMenu = MenuStreamSelect::onKeyPressed(keys);
     MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-    MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-    Mux &mux = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-    mux.stream = streams[stream];
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &mux = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    mux.out = outputs[stream];
     return nextMenu;
   }
 };
 
 struct MenuSysExRecord: public MenuItem {
-  MenuSysExRecord(const char *name_): MenuItem(name_), fileStream("FILE") {}
+  MenuSysExRecord(const char *name_): MenuItem(name_) {}
 
   virtual void onEnter() {
-    MenuStreamSelect *streamSelect = (MenuStreamSelect *)parent;
-    MidiStream *port = streamSelect->streams[streamSelect->stream];
+    MenuStreamSelect<MidiIn> *streamSelect = (MenuStreamSelect<MidiIn> *)parent;
+    MidiIn *port = inputs[streamSelect->stream];
     if(!SD.begin(SD_CS)) {
       return;
     }
@@ -456,26 +491,26 @@ struct MenuSysExRecord: public MenuItem {
 
     // Find an available file
     int i;
-    for(i = 0; i < 100; ++i) {
-      snprintf(fileName, sizeof(fileName), "%sRECORD%02d.SYX", sysExPath, i);
+    for(i = 0; i < 10000; ++i) {
+      snprintf(fileName, sizeof(fileName), "%sREC%04d.SYX", sysExPath, i);
       if(!SD.exists(fileName)) {
         // File found
         break;
       }
     }
-    if(i >= 100) {
+    if(i >= 10000) {
       // Directory full !
       SD.end();
       return;
     }
     file = SD.open(fileName, FILE_WRITE);
-    fileStream.file = &file;
+    fileStream.setFile(&file);
     sysExSource = port;
     sysExTarget = &fileStream;
   }
 
   virtual const char * line2() {
-    if(!fileStream.file) {
+    if(!file) {
       return "SD CARD ERROR";
     }
     return "ANY KEY TO STOP";
@@ -488,22 +523,22 @@ struct MenuSysExRecord: public MenuItem {
   virtual void onExit() {
     sysExSource = NULL;
     sysExTarget = NULL;
-    if(fileStream.file) {
+    if(file) {
       file.close();
       SD.end();
     }
   }
 
   File file;
-  SysExFileStream<File> fileStream;
+  SysExFileRecorder fileStream;
 };
 
 struct MenuSysExReplay: public MenuItem {
-  MenuSysExReplay(const char *name_): MenuItem(name_), fileStream("FILE") {}
+  MenuSysExReplay(const char *name_): MenuItem(name_) {}
   virtual void onEnter() {
-    MenuStreamSelect *streamSelect = (MenuStreamSelect *)(parent->parent);
-    MidiStream *port = streamSelect->streams[streamSelect->stream];
-    fileStream.file = &((MenuFileSelect *)parent)->file;
+    MenuStreamSelect<MidiOut> *streamSelect = (MenuStreamSelect<MidiOut> *)(parent->parent);
+    MidiOut *port = outputs[streamSelect->stream];
+    fileStream.setFile(&((MenuFileSelect *)parent)->file);
     sysExSource = &fileStream;
     sysExTarget = port;
   }
@@ -521,79 +556,43 @@ struct MenuSysExReplay: public MenuItem {
     sysExTarget = NULL;
   }
 
-  SysExFileStream<File> fileStream;
+  SysExFilePlayer fileStream;
 };
 
-struct MenuPanic: public MenuItem {
-  MenuPanic(const char *name_): MenuItem(name_) {}
-  virtual const char * line2() {
-    return "DOWN:ALL NOTEOFF";
-  }
-  virtual MenuItem * onKeyPressed(int keys) {
-    if(keys == Menu::KEY_DOWN) {
-      for(int i = 0; i < outputCount; ++i) {
-        MidiStream *output = outputs[i];
-        for(int c = 0; c < 16; ++c) {
-          // Wait until the port is ready ...
-          // Yes, we do it that way because it's an emergency situation
-          // where we don't want anything disturbing the reset process
-          while(!output->availableForWrite());
-            MidiStream::flushAll();
-          output->write(MIDI_CTL | c);
-          output->write(123);
-          output->write(0);
-        }
+struct MenuPanic: public MenuConfirm {
+  MenuPanic(const char *name_): MenuConfirm(name_, "DOWN: ALL NOTEOFF") {}
+  virtual void onConfirmed() {
+    for(int i = 0; i < outputCount; ++i) {
+      MidiOut *output = outputs[i];
+      for(int c = 0; c < 16; ++c) {
+        // Wait until the port is ready ...
+        // It's done that way because it's an emergency situation
+        while(!output->availableForWrite(this));
+          routeMidi();
+
+        // Send the actual "Note Off" message
+        output->write(MIDI_CTL | c, this);
+        output->write(123, this);
+        output->write(0, this);
       }
     }
-    return NULL;
   }
 };
 
-struct MenuResetChannelProcessing: public MenuItem {
-  MenuResetChannelProcessing(const char *name_): MenuItem(name_) {}
-  virtual const char * line2() {
-    return "DOWN TO RESET";
-  }
-  virtual MenuItem * onKeyPressed(int keys) {
-    if(keys == Menu::KEY_DOWN) {
-      MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-      MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-      Mux &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-      stream.resetProcessing();
-    }
-    return NULL;
+struct MenuResetChannelProcessing: public MenuConfirm {
+  MenuResetChannelProcessing(const char *name_): MenuConfirm(name_, "DOWN TO RESET") {}
+  virtual void onConfirmed() {
+    MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
+    MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+    MidiRoute &stream = inputs[inputMenu->stream]->getRoute(routeMenu->number - 1);
+    stream.resetProcessing();
   }
 };
 
-struct MenuResetRoute: public MenuItem {
-  MenuResetRoute(const char *name_): MenuItem(name_) {}
-  virtual const char * line2() {
-    return "DOWN TO RESET";
-  }
-  virtual MenuItem * onKeyPressed(int keys) {
-    if(keys == Menu::KEY_DOWN) {
-      MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
-      MenuStreamSelect *inputMenu = (MenuStreamSelect *)(routeMenu->parent);
-      Mux &stream = routingMatrix[inputMenu->stream][routeMenu->number - 1];
-      stream.reset();
-      stream.stream = outputs[0];
-      if(routeMenu->number > 1)
-        stream.filter = 0;
-    }
-    return NULL;
-  }
-};
-
-struct MenuResetProfile: public MenuItem {
-  MenuResetProfile(const char *name_): MenuItem(name_) {}
-  virtual const char * line2() {
-    return "DOWN TO RESET";
-  }
-  virtual MenuItem * onKeyPressed(int keys) {
-    if(keys == Menu::KEY_DOWN) {
-      resetMux();
-    }
-    return NULL;
+struct MenuResetProfile: public MenuConfirm {
+  MenuResetProfile(const char *name_): MenuConfirm(name_, "DOWN TO RESET") {}
+  virtual void onConfirmed() {
+    resetSettings();
   }
 };
 
@@ -627,6 +626,47 @@ struct MenuParaPolyphony: public MenuNumberSelect {
   }
 };
 
+struct MenuDeleteRoute: public MenuConfirm {
+  MenuDeleteRoute(const char *name_): MenuConfirm(name_, "DOWN TO DELETE") {}
+  virtual MenuItem * onKeyPressed(int keys) {
+    if(keys == Menu::KEY_DOWN) {
+      MenuNumberSelect *routeMenu = (MenuNumberSelect *)(parent->parent);
+      MenuStreamSelect<MidiIn> *inputMenu = (MenuStreamSelect<MidiIn> *)(routeMenu->parent);
+      inputs[inputMenu->stream]->deleteRoute(routeMenu->number - 1);
+      return parent->parent->parent;
+    }
+    return MenuConfirm::onKeyPressed(keys);
+  }
+};
+
+MenuConfirm menuNoMoreRoute(" CANNOT CREATE","      ROUTE");
+struct MenuRouteSelect: public MenuNumberSelect {
+  MenuRouteSelect(const char *name_, MenuItem &subMenu_):
+    MenuNumberSelect(name_, subMenu_, 1, 1) {}
+
+  virtual void onEnter() {
+    MenuNumberSelect::onEnter();
+    MidiIn *in = inputs[((MenuStreamSelect<MidiIn> *)parent)->stream];
+    maximum = in->inRouteCount;
+    if(MidiIn::countRoutes() < MidiIn::maxRouteCount && maximum < MidiIn::maxRoutes)
+      ++maximum;
+  }
+
+  virtual MenuItem * onKeyPressed(int keys) {
+    if(keys == Menu::KEY_DOWN) {
+      MidiIn *in = inputs[((MenuStreamSelect<MidiIn> *)parent)->stream];
+      if(number > in->inRouteCount) {
+        // Create a new route
+        if(!in->createRoute(&midi1))
+          return &menuNoMoreRoute;
+      }
+      return &subMenu;
+    }
+    return MenuNumberSelect::onKeyPressed(keys);
+  }
+
+};
+
 MenuParaPolyphony paraPolyphony("CHAN. POLYPHONY");
 MenuParaTargetChannel paraTargetChannel("NEXT CHANNEL");
 MenuList paraSettings("PARA. SETTINGS", paraPolyphony, paraTargetChannel);
@@ -637,10 +677,9 @@ MenuSaveSettings menuSaveSettings("SAVE PROFILE");
 MenuSysExRecord sysExRecordStart("RECORDING SYSEX");
 MenuSysExReplay sysExReplayStart("REPLAYING SYSEX");
 MenuFileSelect sysExReplayFile("SYSEX REPLAY", sysExReplayStart, SD_CS, sysExPath);
-MenuStreamSelect sysExRecordPort("RECORD FROM", sysExRecordStart, inputs, inputCount);
-MenuStreamSelect sysExReplayPort("REPLAY TO", sysExReplayFile, outputs, outputCount);
+MenuStreamSelect<MidiIn> sysExRecordPort("RECORD FROM", sysExRecordStart, inputs, inputCount);
+MenuStreamSelect<MidiOut> sysExReplayPort("REPLAY TO", sysExReplayFile, outputs, outputCount);
 MenuResetChannelProcessing resetChannelProcessing("RESET CHAN PROC.");
-MenuResetRoute resetRouteMenu("RESET ROUTE");
 MenuTranspose transposeMenu("TRANSPOSE SEMI.");
 MenuVelocityScale velocityScaleMenu("VELOCITY SCALE");
 MenuVelocityOffset velocityOffsetMenu("VELOCITY OFFSET");
@@ -648,58 +687,69 @@ MenuChannelMap mapChannelMenu("MAP TO CHANNEL");
 MenuList processingMenu("CHANNEL PROCESS.", mapChannelMenu, transposeMenu, velocityScaleMenu, velocityOffsetMenu);
 MenuNumberSelect connectionsChannelProcessing("CHANNEL PROCESS.", processingMenu, 0, 16);
 MenuSyncDivider connectionsSyncDivider("CLOCK DIVIDER");
+MenuDeleteRoute deleteRoute("DELETE ROUTE");
 MenuChannelFilter connectionsFilterMenu("ROUTE FILTER");
-MenuOutputRoute connectionsOutputMenu("OUTPUT", outputs, outputCount);
-MenuList connectionsSetupMenu("ROUTE SETUP", connectionsOutputMenu, connectionsFilterMenu, connectionsSyncDivider, connectionsChannelProcessing, resetChannelProcessing, resetRouteMenu);
-MenuNumberSelect connectionsRouteMenu("ROUTE", connectionsSetupMenu, 1, routeCount);
-MenuStreamSelect connectionsMenu("CONNECTIONS", connectionsRouteMenu, inputs, inputCount);
-MenuList mainMenu("MAIN MENU", connectionsMenu, connectionsParaChannel, menuSaveSettings, sysExRecordPort, sysExReplayPort, menuResetProfile, menuPanic);
+MenuOutputRoute connectionsOutputMenu("OUTPUT");
+MenuList connectionsSetupMenu("ROUTE SETUP", connectionsOutputMenu, connectionsFilterMenu, deleteRoute, connectionsSyncDivider, connectionsChannelProcessing, resetChannelProcessing);
+MenuRouteSelect connectionsRouteMenu("ROUTE", connectionsSetupMenu);
+MenuStreamSelect<MidiIn> connectionsMenu("CONNECTIONS", connectionsRouteMenu, inputs, inputCount);
+MenuList mainMenu("MAIN MENU", connectionsMenu, connectionsParaChannel, menuSaveSettings, menuResetProfile, sysExRecordPort, sysExReplayPort, menuPanic);
 MenuProfileSelector profileSelector("DOWN FOR MENU", mainMenu);
 Menu menu(profileSelector, PB12, PB13, PB14, PB15);
 
-void saveSettings(File *file) {
+template<typename T>
+void saveSettings(T *file) {
+  bool hasOutput = false;
+
+  file->println("VERSION:" MIDIBOX_VERSION);
+  file->println("");
   for(int f = 0; f < inputCount; ++f) {
-    if(f > 0) {
+    if(hasOutput) {
       file->println("");
       file->println("");
     }
-    file->print("FROM:");
-    file->println(inputs[f]->name);
-    for(int t = 0; t < routeCount; ++t) {
-      file->println("");
-      file->print("  ROUTE:");
-      file->println(t + 1);
-      Mux &m = routingMatrix[f][t];
-      if(m.stream) {
-        file->print("  TO:");
-        file->println(m.stream->name);
+    hasOutput = false;
+    for(int t = 0; t < inputs[f]->inRouteCount; ++t) {
+      MidiRoute &m = inputs[f]->getRoute(t);
+      if(!hasOutput)
+      {
+        hasOutput = true;
+        file->print("INPUT:");
+        file->println(inputs[f]->name);
       }
-      file->print("  FILTER:");
+      file->println("");
+      file->print("  OUTPUT:");
+      file->println(m.out->name);
+      file->print("    FILTER:");
       for(int bit = 0; bit < 32; ++bit) {
-        file->print(m.filter.getMask() & (1 << bit) ? '1':'0');
+        file->print(m.getFilter() & (1 << bit) ? '1':'0');
       }
       file->println("");
-      file->print("  DIVIDE:");
-      file->println(m.syncDivider);
-      if(m.processingEnabled()) {
-        for(int c = 1; c < 16; ++c) {
-           file->print("  CHANNEL:");
-           file->println(c);
-           file->print("    MAP:");
-           file->println(m.getChannelMapping(c));
-           file->print("    TRANSPOSE:");
-           file->println(m.getTransposition(c));
-           file->print("    VELOC_SCALE:");
-           file->println(m.getVelocityScale(c));
-           file->print("    VELOC_OFFSET:");
-           file->println(m.getVelocityOffset(c));
-        }
+      file->print("    DIVIDE:");
+      file->println(m.getSyncDivider());
+      for(int c = 1; c <= 16; ++c) {
+         if(!m.processingEnabled(c))
+           continue;
+         file->print("    CHANNEL:");
+         file->println(c);
+         file->print("      MAP:");
+         file->println(m.getChannelMapping(c));
+         file->print("      TRANSPOSE:");
+         file->println(m.getTransposition(c));
+         file->print("      VELOC_SCALE:");
+         file->println(m.getVelocityScale(c));
+         file->print("      VELOC_OFFSET:");
+         file->println(m.getVelocityOffset(c));
       }
     }
   }
 
   file->println("");
-  for(int c = 1; c < 16; ++c) {
+  hasOutput = false;
+  for(int c = 1; c <= 16; ++c) {
+    if(paraBus.getPolyphony(c) == 16 && paraBus.getNextChannel(c) == c)
+      continue;
+    hasOutput = true;
     file->println("");
     file->print("PARA_CHANNEL:");
     file->println(c);
@@ -708,63 +758,62 @@ void saveSettings(File *file) {
     file->print("  NEXT_CHANNEL:");
     file->println(paraBus.getNextChannel(c));
   }
+  if(hasOutput)
+    file->println("");
 }
 
 int getInputStreamIndex(const char *name) {
-  MidiStream *s = MidiStream::getStreamByName(name);
-  if(!s)
-    return -1;
   for(int i = 0; i < inputCount; ++i)
-    if(inputs[i] == s)
+    if(strcmp(inputs[i]->name, name) == 0)
       return i;
   return -1;
 }
 
-void resetMux() {
-  for(int i = 0; i < inputCount; ++i) {
-    for(int r = 0; r < routeCount; ++r) {
-      resetRoute(routingMatrix[i][r]);
-      if(r > 0)
-        // Block routes > 0 by default
-        routingMatrix[i][r].filter = 0;
-    }
-  }
+MidiOut * getOutputByName(const char *name) {
+  for(int i = 0; i < outputCount; ++i)
+    if(strcmp(outputs[i]->name, name) == 0)
+      return outputs[i];
+  return NULL;
+}
+
+void resetSettings() {
+  for(int i = 0; i < inputCount; ++i)
+    inputs[i]->clearRoutes();
   paraBus.init();
 }
 
-void loadSettings(File *file) {
+template<typename T>
+void loadSettingsFrom(T *file) {
   String key;
   String value;
   int from = -1;
-  int route = -1;
   int channel = -1;
   int paraChannel = -1;
-  MidiStream *to = NULL;
-  Mux *mux = NULL;
-  resetMux();
+  MidiOut *to = NULL;
+  MidiRoute *mux = NULL;
+
+  resetSettings();
+
   while(file->available()) {
     while(file->available() && (file->peek() == ' ' || file->peek() == '\r' || file->peek() == '\n'))
       file->read(); // Skip leading spaces
+
     key = file->readStringUntil(':');
     value = file->readStringUntil('\n');
+
+    // Trim \r
     if(value.length() && value[value.length() - 1] == '\r')
       value = value.substring(0, value.length() - 1);
+
     if(key.length() < 1 || key.length() > 16 || value.length() < 1 || value.length() > 64)
       continue;
-    if(key == "FROM") {
+    if(key == "INPUT") {
       from = getInputStreamIndex(value.c_str());
       mux = NULL;
-      route = -1;
-    } else if(key == "ROUTE") {
-      route = value.toInt() - 1;
-      if(route < 0 || route >= routeCount)
-        route = -1;
-    } else if(key == "TO") {
-      to = MidiStream::getStreamByName(value.c_str());
-      if(from != -1 && route != -1 && to) {
-        mux = &routingMatrix[from][route];
-        mux->stream = to;
-      }
+    } else if(key == "OUTPUT") {
+      to = getOutputByName(value.c_str());
+      if(from != -1 && to)
+        mux = inputs[from]->createRoute(to);
     } else if(key == "FILTER") {
       int mask = 0;
       if(value.length() == 32) {
@@ -774,13 +823,10 @@ void loadSettings(File *file) {
         }
       }
       if(mux)
-        mux->filter = mask;
+        mux->setFilter(mask);
     } else if(key == "DIVIDE") {
-      if(mux) {
-        mux->syncDivider = value.toInt();
-        if(mux->syncDivider < 1 || mux->syncDivider > 64)
-          mux->syncDivider = 1;
-      }
+      if(mux)
+        mux->setSyncDivider(value.toInt());
     } else if(key == "CHANNEL") {
       channel = value.toInt();
       if(channel < 1 || channel > 16)
@@ -811,176 +857,199 @@ void loadSettings(File *file) {
   }
 }
 
-void routeMidi() {
-  if(sysExSource && sysExTarget) {
-    // Transmitting a sysEx file
-    int avail = sysExSource->available();
-    int availForWrite = sysExTarget->availableForWrite();
-    if(avail > availForWrite)
-      avail = availForWrite;
-    for(int i = 0; i < avail; ++i) {
-      sysExTarget->write(sysExSource->read());
+void loadSettings() {
+  resetSettings();
+
+#if MIDIBOX_EXT_COUNT
+  if(repeater)
+    return;
+#endif
+
+  if(SD.begin(SD_CS)) {
+    File file = SD.open(getSettingsPath());
+    if(file) {
+      loadSettingsFrom(&file);
+      file.close();
+      SD.end();
+      return;
     }
+    SD.end();
+  }
+
+  // Load failed
+  for(int i = 0; i < inputCount; ++i)
+    // Default profile: route all inputs to the first output
+    inputs[i]->createRoute(outputs[0]);
+}
+
+void routeMidi() {
+  if(sysExSource && sysExTarget && sysExSource->available() && sysExTarget->availableForWrite(sysExSource)) {
+    // Transmitting a sysEx file
+    sysExTarget->write(sysExSource->read(), sysExSource);
     if(sysExSource->eof()) {
       // Finished transfer: reset and go back to main menu
       menu.switchToMain();
     }
-    return;
   }
 
-  for(int i = 0; i < inputCount; ++i) {
-    int inAvail = inputs[i]->available();
-    bool routeFull = false;
+  for(int i = 0; i < inputCount; ++i)
+    inputs[i]->route();
 
-    // Check if any target route is full before starting consuming bytes
-    for(int r = 0; r < routeCount; ++r) {
-      Mux &route = routingMatrix[i][r];
-      if(route.stream && !route.availableForWrite())
-        routeFull = true;
-    }
-
-    // Route all available bytes from the input
-    // until either the input or one of the outputs become full
-    for(int bc = 0; bc < inAvail && !routeFull; ++bc) {
-      byte b = inputs[i]->read();
-      for(int r = 0; r < routeCount; ++r) {
-        Mux &route = routingMatrix[i][r];
-        route.write(b);
-        if(!route.availableForWrite()) {
-          // If a single route is full, don't consume any more bytes on this input.
-          routeFull = true;
-        }
-      }
-    }
-  }
-
-  MidiStream::flushAll();
+  MidiIn::routeAll();
 }
 
+#if MIDIBOX_EXT_COUNT
 void routeRepeater() {
   byte b;
 
-  MidiSerialMux::dispatch();
-
   // Handle MUX -> MIDI
 
+#if MIDIBOX_EXT_COUNT >= 1
   if(midiMux1.available()) {
     b = midiMux1.read();
     if(repeater != 1)
-      midiMux1.write(b);
+      midiMux1.MidiOut::write(b, NULL);
     else
-      midi1.write(b);
+      midi1.MidiOut::write(b, NULL);
   }
   
   if(midiMux2.available()) {
     b = midiMux2.read();
     if(repeater != 1)
-      midiMux2.write(b);
+      midiMux2.MidiOut::write(b, NULL);
     else {
-      midi2.write(b);
-      gates.write(b);
+      midi2.MidiOut::write(b, NULL);
+#if MIDIBOX_GATES
+      gates.MidiOut::write(b, NULL);
+#endif
     }
   }
+#endif
 
+#if MIDIBOX_EXT_COUNT >= 2
   if(midiMux3.available()) {
     b = midiMux3.read();
     if(repeater != 2)
-      midiMux3.write(b);
+      midiMux3.MidiOut::write(b, NULL);
     else
-      midi1.write(b);
+      midi1.MidiOut::write(b, NULL);
   }
     
     if(midiMux4.available()) {
     b = midiMux4.read();
     if(repeater != 2)
-      midiMux4.write(b);
+      midiMux4.MidiOut::write(b, NULL);
     else {
-      midi2.write(b);
-      gates.write(b);
+      midi2.MidiOut::write(b, NULL);
+#if MIDIBOX_GATES
+      gates.MidiOut::write(b, NULL);
+#endif
     }
   }
+#endif
 
+#if MIDIBOX_EXT_COUNT >= 3
   if(midiMux5.available()) {
     b = midiMux5.read();
     if(repeater != 3)
-      midiMux5.write(b);
+      midiMux5.MidiOut::write(b, NULL);
     else
-      midi1.write(b);
+      midi1.MidiOut::write(b, NULL);
   }
     
     if(midiMux6.available()) {
     b = midiMux6.read();
     if(repeater != 3)
-      midiMux6.write(b);
+      midiMux6.MidiOut::write(b, NULL);
     else {
-      midi2.write(b);
-      gates.write(b);
+      midi2.MidiOut::write(b, NULL);
+#if MIDIBOX_GATES
+      gates.MidiOut::write(b, NULL);
+#endif
     }
   }
+#endif
 
+#if MIDIBOX_EXT_COUNT >= 4
   if(midiMux7.available()) {
-    b = midiMux5.read();
+    b = midiMux7.read();
     if(repeater != 4)
-      midiMux5.write(b);
+      midiMux7.MidiOut::write(b, NULL);
     else
-      midi1.write(b);
+      midi1.MidiOut::write(b, NULL);
   }
     
-    if(midiMux8.available()) {
-    b = midiMux6.read();
+  if(midiMux8.available()) {
+    b = midiMux8.read();
     if(repeater != 4)
-      midiMux6.write(b);
+      midiMux8.MidiOut::write(b, NULL);
     else {
-      midi2.write(b);
-      gates.write(b);
+      midi2.MidiOut::write(b, NULL);
+#if MIDIBOX_GATES
+      gates.MidiOut::write(b, NULL);
+#endif
     }
   }
+#endif
 
   // Handle MIDI -> MUX
   if(midi1.available()) {
     b = midi1.read();
     switch(repeater) {
+#if MIDIBOX_EXT_COUNT >= 1
       case 1:
-        midiMux1.write(b);
+        midiMux1.MidiOut::write(b, NULL);
         break;
+#endif
+#if MIDIBOX_EXT_COUNT >= 2
       case 2:
-        midiMux3.write(b);
+        midiMux3.MidiOut::write(b, NULL);
         break;
+#endif
+#if MIDIBOX_EXT_COUNT >= 3
       case 3:
-        midiMux5.write(b);
+        midiMux5.MidiOut::write(b, NULL);
         break;
+#endif
+#if MIDIBOX_EXT_COUNT >= 4
       case 4:
-        midiMux7.write(b);
+        midiMux7.MidiOut::write(b, NULL);
         break;
+#endif
     }
   }
 
   if(midi2.available()) {
     b = midi2.read();
     switch(repeater) {
+#if MIDIBOX_EXT_COUNT >= 1
       case 1:
-        midiMux2.write(b);
+        midiMux2.MidiOut::write(b, NULL);
         break;
+#endif
+#if MIDIBOX_EXT_COUNT >= 2
       case 2:
-        midiMux4.write(b);
+        midiMux4.MidiOut::write(b, NULL);
         break;
+#endif
+#if MIDIBOX_EXT_COUNT >= 3
       case 3:
-        midiMux6.write(b);
+        midiMux6.MidiOut::write(b, NULL);
         break;
+#endif
+#if MIDIBOX_EXT_COUNT >= 4
       case 4:
-        midiMux8.write(b);
+        midiMux8.MidiOut::write(b, NULL);
         break;
+#endif
     }
   }
 }
-
-int repeaterMillis = 0;
-int repeaterPhase = 0;
+#endif
 
 // Multiplexers
 void setup() {
-  Serial.begin(9600);
-  
+#if MIDIBOX_EXT_COUNT
   // Detect if repeater mode is enabled or not
   pinMode(PA1, INPUT_PULLUP);
   pinMode(PA0, INPUT_PULLUP);
@@ -994,6 +1063,8 @@ void setup() {
     pinMode(PB15, INPUT_PULLUP);
     delay(10);
     if(!digitalRead(PB14)) {
+      // Repeater mode is enabled
+      // Read repeater address
       pinMode(PB14, INPUT_PULLUP);
       pinMode(PB15, INPUT_PULLUP);
       delay(10);
@@ -1004,35 +1075,95 @@ void setup() {
       }
     }
   }
-  
-  MidiStream::setupAll();
+
   if(!repeater) {
-    resetMux();
+#endif
+#if MIDIBOX_USB
+    // Initialize peripherals
+    USBComposite.clear();
+#endif
+
+    // Initialize all ports
+    for(int o = 0; o < outputCount; ++o)
+      outputs[o]->init();
+
+#if MIDIBOX_USB_SERIAL
+    // Initialize USB serial port
+    usbSerial.setTXPacketSize(8);
+    usbSerial.registerComponent();
+#endif
+
+#if MIDIBOX_USB
+    // Start USB engine
+    USBComposite.begin();
+#endif
+
+    // Init menu system
     menu.init();
+    loadSettings();
+#if MIDIBOX_EXT_COUNT
   } else {
-    pinMode(LED_BUILTIN, OUTPUT);
-    digitalWrite(LED_BUILTIN, 0);
-    repeaterMillis = millis();
+    for(int o = 0; o < repeaterOutputCount; ++o)
+      outputs[o]->init();
+    resetSettings();
   }
+#endif
+
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, 0);
+  pollMillis = millis();
 }
 
 void loop() {
+#if MIDIBOX_EXT_COUNT
   if(!repeater) {
-    menu.poll();
+#endif
     routeMidi();
+
+    // Poll keyboard and blink LED
+    while(millis() - pollMillis >= 50) {
+      menu.poll();
+
+      // Blink at 0.5Hz
+      digitalWrite(LED_BUILTIN, blinkPhase >= 20);
+      if(blinkPhase >= 40)
+        blinkPhase = 0;
+      else
+        ++blinkPhase;
+      pollMillis += 50;
+
+#if MIDIBOX_USB_SERIAL
+      // Process USB serial commands
+      if(usbSerial.available()) {
+        char cmd = usbSerial.peek();
+        if(cmd == '?') {
+          // Flush buffer to avoid duplicates
+          while(usbSerial.available())
+            usbSerial.read();
+          saveSettings(&usbSerial);
+        } else {
+          loadSettingsFrom(&usbSerial);
+        }
+      }
+#endif
+    }
+#if MIDIBOX_EXT_COUNT
   } else {
     routeRepeater();
-    while(millis() - repeaterMillis >= 100) {
-      if(repeaterPhase & 1) {
+
+    // Blink LED with repeater ID
+    while(millis() - pollMillis >= 100) {
+      if(blinkPhase & 1) {
         digitalWrite(LED_BUILTIN, 1);
       } else {
-        digitalWrite(LED_BUILTIN, repeaterPhase / 2 >= repeater);
+        digitalWrite(LED_BUILTIN, blinkPhase / 2 >= repeater);
       }
-      if(repeaterPhase == 10)
-        repeaterPhase = 0;
+      if(blinkPhase == 10)
+        blinkPhase = 0;
       else
-        ++repeaterPhase;
-      repeaterMillis += 100;
+        ++blinkPhase;
+      pollMillis += 100;
     }
   }
+#endif
 }

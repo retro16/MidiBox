@@ -1,6 +1,7 @@
 #ifndef _MENU_H
 #define _MENU_H
 
+#include <itoa.h>
 #include <LiquidCrystal_I2C_STM32.h>
 #include <SD.h>
 
@@ -76,29 +77,12 @@ struct Menu {
     currentMenu->onEnter();
     displayRefresh();
     wallClock = millis() + REFRESH_PERIOD;
-    if(BLINK_PERIOD) {
-      digitalWrite(LED_BUILTIN, 0);
-      pinMode(LED_BUILTIN, OUTPUT);
-    }
   }
 
   // Call in the main loop
   void poll() {
-    int currentMillis = millis();
-    
-    // Generate a 20Hz display refresh signal
-    if(currentMillis > wallClock + REFRESH_PERIOD) {
-      wallClock = currentMillis;
-
-      // Read pressed keys
-      readKeys();
-      
-      // Blink LED
-      if(BLINK_PERIOD && (++blinkCount > BLINK_PERIOD)) {
-        blinkCount = 0;
-        digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-      }
-    }
+    // Read pressed keys
+    readKeys();
   }
 
   void switchTo(MenuItem &newMenu) {
@@ -119,9 +103,8 @@ private:
   static const int REFRESH_PERIOD = 50; // Screen refresh period in milliseconds
   static const int KEY_REPEAT_FIRST = 12; // Refresh periods before starting key repeat
   static const int KEY_REPEAT_NEXT = 4; // Refresh periods between 2 key repeats
-  static const int KEY_REPEAT_ACCEL_THRES = 10; // Repeats before going to fast mode
+  static const int KEY_REPEAT_ACCEL_THRES = 5; // Repeats before going to fast mode
   static const int KEY_REPEAT_FAST = 1; // Refresh periods between 2 key repeats
-  static const int BLINK_PERIOD = 10; // Blink LED_BUILTIN for heartbeat. Set to 0 to disable.
 
   void onKeyPressed(int keys);
   void readKeys();
@@ -135,7 +118,6 @@ private:
   int keyRepeat; // Frame counter for key repeat
   int keyRepeatCount;
   int wallClock;
-  int blinkCount;
   LiquidCrystal_I2C_STM32 lcd;
   MenuItem *currentMenu;
   MenuItem *mainMenu;
@@ -170,6 +152,29 @@ struct MenuNumberSelect: public MenuItem {
   int minimum;
   int maximum;
   int number;
+};
+
+struct MenuConfirm: public MenuItem {
+  MenuConfirm(const char *name_, const char *message_):
+    MenuItem(name_),
+    message(message_)
+  {}
+
+  MenuConfirm(const char *name_, const char *message_, MenuItem& parent_):
+    MenuItem(name_),
+    message(message_)
+  {
+    parent = &parent_;
+  }
+
+  virtual const char * line2() {
+    return message;
+  }
+
+  virtual MenuItem * onKeyPressed(int keys);
+  virtual void onConfirmed() {}
+
+  const char *message;
 };
 
 struct MenuFileSelect: public MenuItem {

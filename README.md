@@ -6,102 +6,82 @@ A smart MIDI box based on a STM32 "blue pill" microcontroller (STM32F103C8T6).
 It provides many features for its size and cost, including:
 
  * 2 on-board MIDI ports with proper opto-isolators and transistor output.
+ * USB-MIDI support on the integrated STM32 USB port.
  * Up to 8 extra MIDI ports by using a round-robin high-speed serial protocol.
    The MIDI extenders can be built from the same hardware for cost saving.
- * 8 analog gates (5V v-trig)
- * Many routing options with internal loopback busses
- * Port splitting/thru/mirroring
- * Port merging with internal buffering and proper message interleaving
- * Channel/message type filtering for each route
- * Channel remapping for each route
- * Per route and per channel transposition and velocity adjustments
- * Low latency (approx 100us), operation is not interrupted when browsing menus
-   (browsing menus introduces lag though)
- * Easy to use menu using a LCD screen and 4 directional buttons
- * 9 routing profiles stored on a SD card
+ * 8 analog gates (5V v-trig).
+ * Up to 48 internal routes (virtual "cables" between an internal in and out).
+ * Many routing options with internal loopback busses.
+ * Port splitting/thru/mirroring.
+ * Port merging with internal buffering and proper message interleaving.
+ * Channel/message type filtering for each route.
+ * Channel remapping for each route.
+ * Per route and per channel transposition and velocity adjustments.
+ * Low latency (approx 150us), operation is not interrupted when browsing menus
+   (browsing menus introduces lag though).
+ * Easy to use menu using a LCD screen and 4 directional buttons.
+ * 9 routing profiles stored on a SD card.
  * Ability to save and replay MIDI system exclusive dumps to/from SD card
-   (SYX files)
- * Per-route MIDI clock divider
+   (SYX files).
+ * Per-route MIDI clock divider.
    (reduces the tempo for that particular output or bus)
  * Paraphonic mapper: dispatch simultaneous notes coming from a single channel
    on multiple synths (multiple channels) in real time. Allows combining
    multiple similar synths together to increase their polyphony.
- * SD and LCD are optional. By default, all traffic is routed to a single output
-   so it acts as a MIDI merge box with no interface.
+ * On-the-fly MIDI optimization: strips header bytes when sending multiple
+   events of the same type.
+ * SD and LCD are optional. By default, all traffic is routed to a single
+   output so it acts as a MIDI merge box with no interface.
+ * USB serial port to load/save configuration on the fly.
 
-Help wanted to implement USB-MIDI and "MID" file playback on the STM32 for the
-ultimate MIDI box.
+Help wanted to implement "MID" file playback.
+
+Keyboard split features would also be cool.
 
 Building the code
 =================
 
-This code has been tested on the official STM32duino core available here:
+This code has been tested on the Roger Clark STM32duino core available here:
 
-https://github.com/stm32duino/Arduino_Core_STM32
+https://github.com/rogerclarkmelbourne/Arduino_STM32/
 
 It requires a "blue pill" STM32F103C8T6 board (you can buy them cheap online).
 
+You will need the 128k version to enable all features at the same time.
+
 To have more than 2 MIDI ports, you need to build extenders that you can
 daisy-chain on a multiplexed serial link.
+
+Compile-time settings
+---------------------
+
+The file MidiBox.ino starts with a few defines that you can change to suit
+your needs:
+
+ * MIDIBOX_USB_SERIAL: Set to 1 to enable the USB serial port to load/save
+   configuration on the fly. Set to 0 to disable.
+ * MIDIBOX_USB_MIDI: Set to 1 to enable USB-MIDI support. Set to 0 to
+   disable.
+ * MIDIBOX_EXT_COUNT: Maximum number of MIDI extenders supported. Each
+   extender adds 2 MIDI ports. Set to 0 to disable the feature completely.
+   Up to 4 extenders can be added.
+ * MIDIBOX_GATES: Set to 1 to enable hardware gate outputs. Pins can be
+   configured by the "gates" global variable. Set to 0 to disable.
 
 Hardware
 ========
 
 The hardware part of the project is available on EasyEDA:
 
+(WARNING: the PCB is wrong because a 3rd party part is wrong)
+
 https://easyeda.com/jmclabexperience/midi-box
-
-Optional parts
---------------
-
-Some parts on the PCB are optional, depending on what you wish to do with the
-board.
-
-### Extender address
-
-J1 and J2 are only useful for port extenders so it's useless to put them on the
-main board.
-
-J3 places the firmware in extender mode so it must be omitted on the main board.
-
-### Optional inputs and outputs.
-
- * To remove MIDI IN 1, omit R1, R2, D1 and U1.
- * To remove MIDI OUT 1, omit R3, R4, R5, R6, Q1 and Q2.
- * To remove MIDI IN 2, omit R7, R8, D2 and U3.
- * To remove MIDI OUT 2, omit R9, R10, R11, R12, Q3 and Q4.
- * To remove analog gates, omit U4 and R13-R20.
-
-### Optional SD, LCD and buttons.
-
-If you remove the SD card, the LCD screen and buttons, all MIDI messages will be
-routed to the first MIDI output. It acts like a buffered MIDI merger.
-
-MIDI port extenders can be used in that configuration.
-
-If you omit the SD card, you can omit C2 (decoupling capacitor).
-
-Building a multiplexed extender
--------------------------------
-
- * Build the same PCB as the main board
- * Omit SD, LCD and buttons as they are unused
- * You can put analog gates on an extender, they will share MIDI OUT 2.
-   Analog gates are mapped to C-4 and up on extenders.
- * Place a jumper on J3 (or link LT and RT pins together).
- * Set J1 and J2 to either open or closed to select the 2 MIDI ports it will
-   route (use 0 ohm 0805 resistors or just solder a piece of wire between the
-   pads). Each extender must have a different J1/J2 combination.
- * Connect "MUX TX" of the main board to "MUX RX" of the extender
- * Connect "MUX TX" of the extender to "MUX RX" of the next extender, and so on
-   and so forth (up to 4 extenders, order is not important)
- * Connect "MUX TX" of the last extender to "MUX RX" of the main board
 
 How MIDI routing works
 ======================
 
 This MIDI box has a very powerful router built-in. Each input can be routed to
-3 different outputs, each with its own processing parameters. Multiple routes
+4 different outputs, each with its own processing parameters. Multiple routes
 can point to a single output, in that case messages will be interleaved
 properly.
 
@@ -134,10 +114,10 @@ The schematic below gives you an overview of how messages are processed:
 The processing engine for each route can do various manipulations. Some of them
 can be applied per-channel and some others are global.
 
-By default, route 1 of all MIDI inputs are connected to the MIDI output 1 with
-all processing disabled (pass through). Other routes are disabled.
+By default, all MIDI inputs have one route connected to the MIDI output 1 with
+all processing disabled (pass through).
 
-To disable a route, go to ROUTE FILTER, and select DISABLE ALL.
+To delete a route, go to ROUTE SETUP, and select DELETE ROUTE.
 
 Detailed schematic of MIDI processing:
 
@@ -157,7 +137,8 @@ Detailed schematic of MIDI processing:
                                  ------->| Chan. process |----
                                           ---------------
 
-Channel processing occurs independently for each channel.
+Channel processing occurs independently for each channel. You can apply the
+same processing on all channels by selecting channel 0 in the menu.
 
 Detailed schematic of channel processing:
 
@@ -173,7 +154,7 @@ Detailed schematic of channel processing:
 
 Note: Enabling channel processing increases CPU usage and may introduce a lag
 if used on too many routes at the same time. For best performance, use the
-RESET CH. PROCESS entry in the route menu: that will skip all processing
+RESET CHAN PROC. entry in the route menu: that will skip all processing
 features in a very efficient way.
 
 Loopback busses
@@ -182,7 +163,7 @@ Loopback busses
 This MIDI box provides loopback busses. This can be useful in some cases:
 
  * Apply a common processing to multiple streams.
- * Route a single input to more than 3 outputs.
+ * Route a single input to more outputs.
  * Do advanced manipulations like channel splitting.
 
 All MIDI messages routed to a loopback bus will appear on the matching bus
@@ -234,8 +215,13 @@ Notes:
  * If you need more than 1 synth ensemble, just use independent mappings for
    different channel spans. Use channel mapping at your advantage.
 
+ * Channel processing options in the paraphonic mapper route are applied after
+   paraphonic mapping.
+
  * Paraphonic mapping bus latency is higher because it needs to wait for the
-   whole MIDI "note on" to be received before routing it. It triples latency.
+   whole MIDI "note on" to be received before routing it. This can be a
+   problem when playing notes on a paraphonic output and on a normal output at
+   the same time: timing won't be as tight.
 
  * The paraphonic mapping bus responds to MIDI CC 123 "all notes off" messages
    properly.
@@ -251,7 +237,8 @@ Menu
    * MAIN MENU
      * CONNECTIONS <INPUT>: Route data coming from that input.
        * ROUTE <ROUTE>: Each input can be routed to multiple outputs or busses.
-         Select the route here.
+         Select the route here. To add a new route, select the last one: that
+         will be created when you enter the submenu.
          * OUTPUT <OUTPUT>: Select the output port to which data will be routed.
          * ROUTE FILTER: Allow to filter data per-channel or filter special
           MIDI messages.
@@ -259,6 +246,7 @@ Menu
            * DISABLE ALL: Block all types of messages through this route.
            * CHANNEL n / MIDI message type: Press down to pass (mark) or block
              (cross) this kind of message through this route.
+         * DELETE ROUTE: Delete the route.
          * CLOCK DIVIDER <NUMBER>: Let pass every <NUMBER> MIDI clock messages.
            This allows reducing the tempo of the equipment connected to this
            output.
@@ -273,9 +261,8 @@ Menu
              means 0% (effectively muting the channel) and 100 means 1000%.
            * VELOCITY OFFSET <NUMBER>: Adds an offset to velocity values. This
              is applied after velocity scale.
-         * RESET CH.PROCESS: Reset all channel processing. Channel processing
+         * RESET CHAN PROC.: Reset all channel processing. Channel processing
            will be bypassed, reducing CPU load.
-         * RESET ROUTE: Reset all settings for this route.
      * PARA. CHANNEL <CHANNEL>: Configure paraphonic mapping for the given MIDI
        channel of the paraphonic bus.
          * CHAN. POLYPHONY: Set the maximum polyphony for this channel. All
@@ -285,11 +272,11 @@ Menu
            will be routed to this channel (or to its next channel if it's also
            full, etc...)
      * SAVE PROFILE: Save the current profile to the SD card.
+     * RESET PROFILE: Set the current profile to default values (it's not saved
+       on the SD card).
      * REPLAY TO <OUTPUT> <FILE>: Send a SYX file to the selected output.
      * RECORD FROM <INPUT>: Create a file named RECORDnn.SYX (nn is an
        incremented number) and record all SysEx messages coming from the
        selected input into it.
-     * RESET PROFILE: Set the current profile to default values (it's not saved
-       on the SD card).
      * ALL NOTES OFF: Send the MIDI CC 123 ("all notes off") to all outputs.
        Allows to correct "stuck" notes.

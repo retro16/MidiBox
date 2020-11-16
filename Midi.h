@@ -1,6 +1,8 @@
 #ifndef _MIDIBOX_MIDI_H
 #define _MIDIBOX_MIDI_H
 
+#include <USBComposite.h>
+#include <MidiSpecs.h>
 #include <HardwareSerial.h>
 #include <SPI.h>
 #include <SD.h>
@@ -18,6 +20,10 @@ const byte MIDI_PRES = 0xD0;
 const byte MIDI_BEND = 0xE0;
 // Extended messages
 const byte MIDI_SYSEX_START = 0xF0;
+const byte MIDI_TIME_CODE = 0xF1;
+const byte MIDI_SPP = 0xF2;
+const byte MIDI_SONG_SEL = 0xF3;
+const byte MIDI_TUNE_REQ = 0xF6;
 const byte MIDI_SYSEX_STOP = 0xF7;
 const byte MIDI_CLOCK = 0xF8;
 const byte MIDI_START = 0xFA;
@@ -26,52 +32,15 @@ const byte MIDI_STOP = 0xFC;
 const byte MIDI_SENSE = 0xFE;
 const byte MIDI_RESET = 0xFF;
 
-
-struct MidiFilter {
-public:
-  MidiFilter(): mask(0xFFFFFFFF) {}
-  MidiFilter(int mask_): mask(mask_) {}
-
-  MidiFilter& operator=(MidiFilter& other) {
-    mask = other.mask;
-    return *this;
-  }
-
-  MidiFilter& operator=(int newMask) {
-    mask = newMask;
-    return *this;
-  }
-
-  int getMask() const {
-    return mask;
-  }
-
-  bool operator()(byte message) {
-    if(!(message & 0x80))
-      return false;
-    if((message & 0xF0) != 0xF0)
-      return mask & (1 << (message & 0x0F));
-    return mask & (1 << (16 + (message & 0x0F)));
-  }
-private:
-  int mask;
-};
-
-int midiMessageLength(byte message);
-
 // A simple FIFO of fixed size.
 template<int size>
 struct MidiBuffer {
-  byte bytes[size];
-  int writePtr = 0;
-  int readPtr = 0;
-
   int available() const {
-    return (writePtr >= readPtr) ? (writePtr - readPtr) : (size + writePtr - readPtr);
+    return fill;
   }
 
   int availableForWrite() const {
-    return size - available();
+    return size - fill;
   }
 
   void write(byte b) {
@@ -79,6 +48,7 @@ struct MidiBuffer {
     ++writePtr;
     if(writePtr >= size)
       writePtr = 0;
+    ++fill;
   }
 
   byte read() {
@@ -86,64 +56,102 @@ struct MidiBuffer {
     ++readPtr;
     if(readPtr >= size)
       readPtr = 0;
+    --fill;
     return b;
   }
+
+private:
+  byte bytes[size];
+  int writePtr = 0;
+  int readPtr = 0;
+  int fill = 0;
 };
 
-struct MidiStream {
-public:
-  static const int maxStreams = 70;
-  MidiStream();
-  MidiStream(const char *name);
-
-  // Reset all settings to neutral
+struct MidiTracker {
+  static int extraBytes(byte message);
+  int extraBytes() const;
+  // Track last message and remaining bytes
+  void track(byte message);
   void reset();
-  virtual byte read();
-  virtual void write(byte b);
-  virtual int available() = 0;
-  virtual int availableForWrite() = 0;
-  virtual void init() {}
-  virtual bool eof() {
-    return false;
+  byte message() const {
+    return (lastMessage & 0xF0) == 0xF0 ? lastMessage : (lastMessage & 0xF0);
   }
-  // Returns the last message being read (with channel information)
-  byte lastReadMessage() {
-     return readMessage;
+  byte channel() const {
+    return (lastMessage & 0xF0) == 0xF0 ? 0 : (lastMessage & 0x0F) + 1;
   }
-  bool readingMessage() {
-    return (bool)readRemainingBytes;
+  bool allNotesOff() const {
+    return messageComplete() && (lastMessage & 0xF0) == MIDI_CTL && value == 123;
   }
-  int channel() {
-    if(readingMessage()) {
-      byte message = lastReadMessage();
-      if((message & 0xF0) != 0xF0)
-        return (message & 0x0F) + 1;
-    }
-    return 0;
+  // Return true if the last command byte was omitted
+  // (chained command)
+  bool chained() const {
+    return state == CHAIN;
   }
-  // Returns the last message being written (with channel information)
-  byte lastWrittenMessage() {
-    return writtenMessage;
+  // Return true if processing a system exclusive message
+  bool sysex() const {
+    return lastMessage == MIDI_SYSEX_START || lastMessage == MIDI_SYSEX_STOP;
   }
-  bool writingMessage() {
-    return writeRemainingBytes;
+  bool messageComplete() const {
+    return messageRemainingBytes == 0;
   }
+  byte lastMessage = 0;
+  byte value; // Value of the byte immediately after the message
+  byte messageRemainingBytes = 0;
+  enum State: byte {
+    NONE = 0,
+    COMMAND,
+    CHAIN,
+    DATA
+  };
+  State state = NONE;
+};
 
-  // Call this in your setup
-  static void setupAll();
-
-  // Call this in your main loop to push all buffered data around
-  static void flushAll();
-
+struct MidiOut {
+  MidiOut(const char *name_): name(name_) {}
   const char *name;
-  MidiFilter filter;
+  virtual void init() {}
+  int availableForWrite(void *source) const;
+  void write(byte b, void *source);
+  byte lastSentMessage() const;
 
-  void resetProcessing() {
-    processing = 0;
-  }
-  bool processingEnabled() const {
-    return processing;
-  }
+  // Return true if the last message was sent completely
+  bool messageComplete() const;
+
+protected:
+  static const int sourceTimeout = 400; // Just above active sense threshold
+  virtual int availableForWrite() const = 0;
+  virtual void write(byte b) = 0;
+  MidiTracker tracker;
+  void *currentSource = NULL;
+  // Used to compute source reservation timeout
+  int sourceReserveMillis;
+};
+
+struct MidiRoute {
+  MidiOut *out = NULL;
+
+  // Reset settings
+  void reset();
+
+  // Reset and route everything to an output
+  void reset(MidiOut *out);
+
+  // Reset channel processing settings
+  void resetProcessing();
+
+  int availableForWrite() const;
+
+  // Route a byte
+  void route(byte b);
+
+  // Send processed bytes to the output
+  void write();
+
+  // Route settings
+  void setFilter(int mask);
+  int getFilter() const;
+  void setSyncDivider(int newDivider);
+  int getSyncDivider() const;
   void setChannelMapping(int fromChannel, int toChannel);
   int getChannelMapping(int fromChannel) const;
   void transpose(int channel, int semitones);
@@ -153,389 +161,225 @@ public:
   void setVelocityOffset(int channel, int offset);
   int getVelocityOffset(int channel) const;
 
-  static MidiStream *getStreamByName(const char *name);
-  byte syncDivider = 1;
-  byte syncDividerCounter = 0;
+  bool processingEnabled() const;
+  bool processingEnabled(int channel) const {
+    return processingEnabled() && channelProcessing[channel - 1].enabled();
+  }
+  // Return true if the route is enabled
+  bool active() const {
+    return out != NULL;
+  }
+
 protected:
-  virtual byte linkRead() = 0;
-  virtual void linkWrite(byte b) = 0;
-  template<int>
-  friend class MidiStreamMux;
-  MidiStream *currentWriter = NULL; // Used by MidiStreamMux
-  // Try to flush all buffered bytes
-  virtual void flush() {}
-  byte readMessage;
-  byte writtenMessage;
-  int readRemainingBytes = 0;
-  int writeRemainingBytes = 0;
-private:
+  static const int bufferSize = 24;
+  bool filtered(byte b);
+  int filter;
+  byte syncDivider;
+  byte syncDividerCounter;
   struct ChannelProcessing {
     signed char channelMapping; // Remap channel to another
     signed char transpose; // Transpose notes
     signed char velocityScale;
     signed char velocityOffset;
     void reset();
+    bool enabled() const;
   };
   void enableProcessing();
   char processing; // Set to true if any processing is enabled
   ChannelProcessing channelProcessing[16];
-  static MidiStream *streams[maxStreams];
-  static int count;
-  void registerStream();
+  MidiTracker tracker;
+  MidiBuffer<bufferSize> buffer;
 };
 
-template<typename F>
-struct SysExFileStream: public MidiStream {
-  SysExFileStream(const char *name_): MidiStream(name_), file(NULL)
-  {}
+struct MidiIn {
+  // Maximum routes per input
+  static const int maxRoutes = 8;
+  int inRouteCount = 0;
+  // Maximum routes overall
+  static const int maxRouteCount = 48;
 
-  virtual int available() {
-    return file->available();
+  MidiIn(const char *name_): name(name_) {}
+  const char *name;
+
+  virtual byte read() = 0;
+  virtual int available() const = 0;
+  virtual bool eof() const {
+    return false;
   }
 
-  virtual int availableForWrite() {
-    return 65535;
-  }
+  // Return a route
+  MidiRoute & getRoute(int r);
 
-  virtual bool eof() {
-    return file->available() == 0;
-  }
+  // Clear all routes
+  void clearRoutes();
 
-  F *file;
+  // Append a route. Returns false if no more route is available.
+  MidiRoute * createRoute(MidiOut *out);
 
+  // Remove a route
+  void deleteRoute(int r);
+
+  // Consume and route as many bytes as possible
+  // Call routeAll once route() has been called for
+  // all inputs to route to outputs
+  void route();
+
+  // Route bytes accumulated in buffers to outputs
+  static void routeAll();
+
+  // Return the number of active routes
+  static int countRoutes();
+
+private:
+  // Global route table
+  static MidiRoute routes[maxRouteCount];
+
+  // Index in the "routes" global table
+  char inRoutes[maxRoutes];
+};
+
+struct MidiSerialPort: public MidiIn, public MidiOut {
+  MidiSerialPort(const char *inName, const char *outName, HardwareSerial &serial_): MidiIn(inName), MidiOut(outName), serial(serial_) {}
+  virtual void init();
+  virtual int available() const;
+  virtual byte read();
 protected:
-  virtual byte linkRead() {
-    return file->read();
-  }
-
-  virtual void linkWrite(byte b) {
-    // Only write SysEx events
-    byte m = lastWrittenMessage();
-    if(m == MIDI_SYSEX_START || m == MIDI_SYSEX_STOP) {
-      file->write(b);
-    }
-  }
+  virtual int availableForWrite() const;
+  virtual void write(byte b);
+  HardwareSerial &serial;
 };
 
-template<int size>
-struct MidiStreamMux: public MidiStream {
-  MidiStreamMux() {}
-  MidiStreamMux(const char *name): MidiStream(name) {}
+struct MidiUSBPort: public MidiIn, public MidiOut, public USBMIDI {
+  MidiUSBPort(const char *inName, const char *outName, const int cableId_): MidiIn(inName), MidiOut(outName), cableId(cableId_) {}
+
+  // MidiOut
+  virtual void init();
+  // MidiIn
+  virtual int available() const;
+  virtual byte read();
+protected:
+  // MidiOut
+  virtual int availableForWrite() const;
+  virtual void write(byte b);
+
+  static int usbPacketSize();
+  static void poll();
+  static int cableFilter; // Bitfield
+  static MIDI_EVENT_PACKET_t inPacket;
+  static int inPos;
+  static int inSize;
+
+  MIDI_EVENT_PACKET_t outPacket; // Output packet buffer
+  int outPos = 0; // Pointer in outBuf
+  int cableId = 0;
+};
+
+struct MidiSerialMuxPort;
+struct MidiSerialMux {
+  static const int maxPorts = 8;
+  MidiSerialMux(HardwareSerial &serial_): serial(serial_) {}
+  void init();
   
-  virtual byte read() {
-    return stream->read();
-  }
+  // Called by MidiSerialMuxPort
+  void dispatchInput();
 
-  virtual int available() {
-    return stream ? stream->available() : 0;
-  }
-
-  virtual int availableForWrite() {
-    return stream ? (buf.availableForWrite() + stream->availableForWrite() > 1) : 0;
-  }
-  MidiStream *stream = NULL;
+  int availableForWrite();
+  void write(byte b, byte address);
+  void declare(MidiSerialMuxPort *port, int address);
 protected:
-  virtual byte linkRead() { return 0; }
-  virtual void linkWrite(byte b) {
-    if(!stream)
-      return;
-    if(stream->currentWriter != this) {
-      if(stream->currentWriter) {
-        // Somebody is already sending: buffer for later
-        buf.write(b);
-        return;
-      }
-      // No writer: take ownership
-      // FIXME: Need a timeout for ownership
-      stream->currentWriter = this;
-    }
-    while(buf.available() && stream->availableForWrite() > 1)
-      stream->write(buf.read());
-    if(stream->availableForWrite() > 1)
-      stream->write(b);
-    else
-      buf.write(b);
-    if(!stream->writingMessage())
-      stream->currentWriter = NULL;
-  }
-
-  // Call this from time to time to push buffered bytes into the destination stream
-  virtual void flush() {
-    if(!stream)
-      return;
-    if(!stream->currentWriter && buf.available() && stream->availableForWrite())
-      // FIXME: Need a timeout for ownership
-      stream->currentWriter = this;
-    while(stream->currentWriter == this && buf.available() && stream->availableForWrite()) {
-      stream->write(buf.read());
-      if(!stream->writingMessage()) {
-        // Finished sending one message.
-        // Unlock the target stream to give a chance to other multiplexers.
-        // Waiting messages will be flushed on next call (which should happen ASAP).
-        stream->currentWriter = NULL;
-        break;
-      }
-    }
-  }
-private:
-  MidiBuffer<size> buf;
+  HardwareSerial &serial;
+  byte byteBuffer[maxPorts];
+  MidiSerialMuxPort *ports[maxPorts];
 };
 
-template<int size>
-struct MidiLoopback: public MidiStream {
-public:
-  MidiLoopback(const char *name_): MidiStream(name_) {}
-
-  int available() {
-    return buf.available();
-  }
-
-  int availableForWrite() {
-    return buf.availableForWrite();
-  }
-
-  byte read() {
-    return buf.read();
-  }
-
-  void write(byte b) {
-    buf.write(b);
-  }
-
+struct MidiSerialMuxPort: public MidiIn, public MidiOut {
+  MidiSerialMuxPort(const char *inName, const char *outName, MidiSerialMux &mux_, byte address_): MidiIn(inName), MidiOut(outName), mux(mux_), address(address_) {}
+  virtual void init();
+  virtual int available() const;
+  virtual byte read();
 protected:
-
-  byte linkRead() {
-    return 0;
-  }
-
-  void linkWrite(byte) {
-  }
-
-private:
-  MidiBuffer<size> buf;
+  virtual int availableForWrite() const;
+  virtual void write(byte b);
+  MidiSerialMux &mux;
+  byte address;
+  byte bufferPos; // Pointer in the sentMicros array
+  static const int remoteBuffer = 4;
+  unsigned long sentMicros[remoteBuffer]; // micros() when the n-th last byte was sent. Circular buffer.
+  static const unsigned long MIDI_MICROS_PER_BYTE = 1000000 * 10.55 / MIDI_BAUD_RATE;
+  friend class MidiSerialMux;
+  MidiBuffer<24> inBuf; // Input buffer
 };
 
-struct MidiParaphonyMapper: public MidiStream {
-public:
-  static const int maxPoly = 16; // Maximum allowable polyphony per channel
-
-  MidiParaphonyMapper(const char *name_);
-
-  int available() {
-    return buf.available();
+struct SysExFilePlayer: public MidiIn {
+  SysExFilePlayer(): MidiIn("SYSEX PLAYER") {}
+  void setFile(File *file);
+  virtual int available() const;
+  virtual byte read();
+  virtual bool eof() const {
+    return !available();
   }
+protected:
+  File *file;
+};
 
-  int availableForWrite() {
-    // Reserve some room because writing a single byte can fill the buffer with
-    // up to 3 bytes if it triggers a note
-    return buf.availableForWrite() - 2;
-  }
+struct SysExFileRecorder: public MidiOut {
+  SysExFileRecorder(): MidiOut("SYSEX RECORDER") {}
+  void setFile(File *file);
+protected:
+  virtual int availableForWrite() const;
+  virtual void write(byte b);
+  File *file;
+};
 
-  byte read() {
-    return buf.read();
-  }
+struct MidiLoopback: public MidiIn, public MidiOut {
+  MidiLoopback(const char *name): MidiIn(name), MidiOut(name) {}
+  virtual int available() const;
+  virtual byte read();
+protected:
+  virtual int availableForWrite() const;
+  virtual void write(byte b);
+  static const int bufferSize = 96;
+  MidiBuffer<bufferSize> buffer;
+};
 
-  void write(byte b);
-
-  void resetNotes();
-
-  int getPolyphony(int channel) {
-    if(channel > 0 && channel <= 16)
-      return polyphony[channel - 1];
-    return 0;
-  }
-
-  void setPolyphony(int channel, int newPoly) {
-    if(channel > 0 && channel <= 16 && newPoly > 0 && newPoly <= maxPoly)
-      polyphony[channel - 1] = newPoly;
-  }
-
-  int getNextChannel(int channel) {
-    if(channel > 0 && channel <= 16)
-      return nextChannel[channel - 1] + 1;
-    return 0;
-  }
-
-  void setNextChannel(int channel, int newNextChannel) {
-    if(channel > 0 && channel <= 16 && newNextChannel > 0 && newNextChannel <= maxPoly)
-      nextChannel[channel - 1] = newNextChannel - 1;
+struct MidiParaphonyMapper: public MidiLoopback {
+  static const int maxPoly = 16;
+  MidiParaphonyMapper(const char *name): MidiLoopback(name) {
+    init();
   }
 
   void init();
+  void setPolyphony(int channel, int newPoly);
+  int getPolyphony(int channel);
+  void setNextChannel(int channel, int newNextChannel);
+  int getNextChannel(int channel);
 
 protected:
-
-  byte linkRead() {
-    return 0;
-  }
-
-  void linkWrite(byte) {
-  }
-
-private:
-  char polyphony[16]; // Polyphony of each channel
-  char nextChannel[16]; // Next channel that offloads notes for each channel
-  char streamDec[2]; // Used for MIDI stream decoding
-  char streamPos; // Position inside streamDec
-  char currentNote[16][maxPoly]; // -1 if not playing
-  MidiBuffer<3*maxPoly> buf; // Reserve enough buffer
-
-  int findNoteSlot(char channel, int poly, char note);
-  void noteOn(char channel, char note, char velocity);
-  void noteOff(char channel, char note);
+  virtual void write(byte b);
+  void resetNotes();
+  int findNoteSlot(byte channel, byte note);
+  void noteOn(byte channel, byte note, byte velocity);
+  void noteOff(byte channel, byte note, byte velocity);
   void allNotesOff();
 
+  byte polyphony[16]; // Polyphony of each channel
+  byte nextChannel[16]; // Next channel that offloads notes for each channel
+  byte currentNote[16][maxPoly]; // 255 if not playing
 };
 
-struct MidiSerialPort: public MidiStream {
-  MidiSerialPort(const char *name_, HardwareSerial &serial_): MidiStream(name_), serial(serial_), lastSentMessage(0) {
-  }
-
-  void init() {
-    serial.begin(MIDI_BAUD_RATE);
-  }
-
-  int available() {
-    return serial.available();
-  }
-
-  int availableForWrite() {
-    return serial.availableForWrite();
-  }
-
-protected:
-  byte linkRead() {
-    byte b = serial.read();
-    return b;
-  }
-
-  void linkWrite(byte b) {
-    // Optimize the stream by omitting redundant events
-Serial.print((int)b, HEX);
-Serial.print('-');
-Serial.println((int)lastSentMessage, HEX);
-    if(b != lastSentMessage) {
-      lastSentMessage = writtenMessage;
-      serial.write(b);
-Serial.println("s");
-    }
-  }
-
-private:
-  HardwareSerial &serial;
-  byte lastSentMessage;
-};
-
-// Midi port multiplexer
-//
-// Serial port at 16 times the speed of MIDI. Up to 8 ports can be connected to
-// this multiplexer.
-//
-// The connection is at 500000 bauds (32150*16)
-//
-// Protocol:
-//
-// Each MIDI byte is sent in 2 halves:
-//
-//  ---------------------------------------
-// | b7 | b6 | b5 | b4 | b3 | b2 | b1 | b0 |
-// |----|--------------|-------------------|
-// |HALF|   Port ID    | 4 bits of data    |
-//  ---------------------------------------
-//
-// When HALF is set to 1, b3..b0 contain the 4 most significant bits
-// When HALF is set to 0, b3..b0 contain the 4 least significant bits
-//
-// The upper half (HALF=1) is always sent before the lower half.
-// It is allowed to interleave bytes from multiple ports in the same stream.
-struct MidiSerialMux: public MidiStream {
-  static const int BUF_SIZE = 16;
-  static const int MAX_PORTS = 8;
-  static const int EXT_BAUD_RATE = MIDI_BAUD_RATE * 16; // 8 ports sending double the amount of data
-
-  MidiSerialMux(const char *name_, HardwareSerial &serial_, int id_): MidiStream(name_), id(id_) {
-    port.serial = &serial_;
-  }
-
-  void init() {
-    if(id == 0)
-      port.serial->begin(EXT_BAUD_RATE);
-  }
-
-  int available() {
-    return port.buf[id].available();
-  }
-
-  int availableForWrite() {
-    // Sending one byte takes 2 bytes
-    return port.serial->availableForWrite() / 2;
-  }
-
-  void flush() {
-    if(id == 0)
-      dispatch();
-  }
-
-  // Call this in the main loop before reading individual ports
-  // Called by MidiStream::flushAll for convenience.
-  static void dispatch();
-
-protected:
-  byte linkRead() {
-    return port.buf[id].read();
-  }
-
-  void linkWrite(byte b);
-
-private:
-  struct Port {
-    HardwareSerial *serial;
-    byte byteBuffer[MAX_PORTS];
-    MidiBuffer<BUF_SIZE> buf[MAX_PORTS];
-  };
-
-  byte id;
-  static Port port;
-};
-
-struct MidiGpioGate: public MidiStream {
-  static const int maxNotes = 8; // Maximum number of assigned pins
-
+struct MidiGpioGate: public MidiOut {
   template<typename... pinList>
-  MidiGpioGate(const char *name, pinList... pins): MidiStream(name) {
+  MidiGpioGate(const char *name, pinList... pins): MidiOut(name) {
     mapPins(0, pins...);
   }
 
-  int available() {
-    return 0; // Never returns anything
-  }
-
-  int availableForWrite() {
-    return 65535; // Always accepts messages
-  }
-
 protected:
-  byte linkRead() {
-    return 0xFE; // Never returns anything
-  }
+  static const int maxNotes = 16; // Maximum number of assigned pins
 
-  void linkWrite(byte b) {
-    // TODO: implement MIDI CC 123 (all notes off)
-    for(int i = 0; i < maxNotes; ++i) {
-      auto & map = noteMapping[i];
-      if(writtenMessage == map.noteOn || writtenMessage == map.noteOff) {
-        if(writeRemainingBytes == 2) {
-          // Process note number
-          map.triggered = (b == map.note);
-        } else if(writeRemainingBytes == 1 && map.triggered) {
-          // Process velocity (note: velocity == 0 means note off)
-          digitalWrite(map.pin, writtenMessage == map.noteOn && b > 0);
-        }
-      }
-    }
-  }
+  virtual int availableForWrite() const;
+  virtual void write(byte b);
+  void allNotesOff();
 
-private:
   void mapPins(int) {}
   
   template<typename... pinList>
@@ -546,14 +390,15 @@ private:
     noteMapping[position].noteOff = MIDI_NOTE_OFF;
     noteMapping[position].note = 60 + position; // Assign gates to C-4 and above by default
     pinMode(pin, OUTPUT);
+    digitalWrite(pin, 0);
     mapPins(position + 1, pins...);
   }
 
   struct {
     int pin;
     byte triggered;
-    byte noteOn;
-    byte noteOff;
+    byte noteOn = 0;
+    byte noteOff = 0;
     byte note;
   } noteMapping[maxNotes];
 };

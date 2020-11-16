@@ -44,6 +44,14 @@ void Menu::onKeyPressed(int keys) {
   displayRefresh();
 }
 
+MenuItem * MenuConfirm::onKeyPressed(int keys) {
+  if(keys == Menu::KEY_DOWN) {
+    onConfirmed();
+    return parent;
+  }
+  return NULL;
+}
+
 void Menu::readKeys() {
   if(!currentMenu)
     return;
