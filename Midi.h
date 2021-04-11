@@ -51,6 +51,14 @@ struct MidiBuffer {
     ++fill;
   }
 
+  void writeHead(byte b) {
+    --readPtr;
+    if(readPtr < 0)
+      readPtr = size - 1;
+    bytes[readPtr] = b;
+    ++fill;
+  }
+
   byte read() {
     byte b = bytes[readPtr];
     ++readPtr;
@@ -58,6 +66,10 @@ struct MidiBuffer {
       readPtr = 0;
     --fill;
     return b;
+  }
+
+  byte peek() {
+    return bytes[readPtr];
   }
 
 private:
@@ -69,6 +81,9 @@ private:
 
 struct MidiTracker {
   static int extraBytes(byte message);
+  static bool realtime(byte message) {
+      return message >= 0xF8;
+  }
   int extraBytes() const;
   // Track last message and remaining bytes
   void track(byte message);
@@ -110,7 +125,7 @@ struct MidiOut {
   MidiOut(const char *name_): name(name_) {}
   const char *name;
   virtual void init() {}
-  int availableForWrite(void *source) const;
+  int availableForWrite(byte b, void *source) const;
   void write(byte b, void *source);
   byte lastSentMessage() const;
 
@@ -132,9 +147,6 @@ struct MidiRoute {
 
   // Reset settings
   void reset();
-
-  // Reset and route everything to an output
-  void reset(MidiOut *out);
 
   // Reset channel processing settings
   void resetProcessing();

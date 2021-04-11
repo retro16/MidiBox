@@ -39,30 +39,33 @@ PC13: LED
 
 // Compile-time settings
 #define MIDIBOX_VERSION "1.0"
-#define MIDIBOX_USB_SERIAL 1
+#define MIDIBOX_USB_SERIAL 0
 #define MIDIBOX_USB_MIDI 1
-#define MIDIBOX_EXT_COUNT 4
-#define MIDIBOX_GATES 1
+#define MIDIBOX_EXT_COUNT 0
+#define MIDIBOX_GATES 0
+
+static const int SD_CS = PA4;
+static const char *sysExPath = "/JMC_MIDI/SYSEX/";
+static const char *settingsPath = "/JMC_MIDI/SETTINGS/";
 
 // Includes
 #include <USBComposite.h>
 #include "Midi.h"
 #include "Menu.h"
 
-// Settings and globals
+// Globals
 
 #if MIDIBOX_USB_SERIAL || MIDIBOX_USB_MIDI
 #define MIDIBOX_USB 1
 #endif
 
-static const int SD_CS = PA4;
-static const char *sysExPath = "/JMC_MIDI/SYSEX/";
-static const char *settingsPath = "/JMC_MIDI/SETTINGS/";
-
 MidiSerialPort midi1("MIDI IN 1", "MIDI OUT 1", Serial2);
 MidiSerialPort midi2("MIDI IN 2", "MIDI OUT 2", Serial3);
-MidiSerialMux serialMux(Serial1);
+#if MIDIBOX_EXT_COUNT == 0
+MidiSerialPort midi3("MIDI IN 3", "MIDI OUT 3", Serial1);
+#endif
 #if MIDIBOX_EXT_COUNT >= 1
+MidiSerialMux serialMux(Serial1);
 MidiSerialMuxPort midiMux1("EXT1 MIDI IN 1", "EXT1 MIDI OUT 1", serialMux, 0);
 MidiSerialMuxPort midiMux2("EXT1 MIDI IN 2", "EXT1 MIDI OUT 2", serialMux, 1);
 #endif
@@ -90,6 +93,9 @@ MidiGpioGate gates("ANALOG GATES", PA8, PB1, PA15, PB3, PB4, PB5, PB8, PB9);
 MidiIn *inputs[] = {
   &midi1,
   &midi2,
+#if MIDIBOX_EXT_COUNT == 0
+  &midi3,
+#endif
 #if MIDIBOX_EXT_COUNT >= 1
   &midiMux1,
   &midiMux2,
@@ -146,7 +152,7 @@ MidiOut *outputs[] = {
 };
 const int outputCount = sizeof(outputs)/sizeof(outputs[0]);
 #if MIDIBOX_EXT_COUNT
-const int repeaterOutputCount = (MIDIBOX_EXT_COUNT) + 2;
+const int repeaterOutputCount = (MIDIBOX_EXT_COUNT) * 2 + 2;
 #endif
 
 // Global variables
@@ -567,7 +573,7 @@ struct MenuPanic: public MenuConfirm {
       for(int c = 0; c < 16; ++c) {
         // Wait until the port is ready ...
         // It's done that way because it's an emergency situation
-        while(!output->availableForWrite(this));
+        while(!output->availableForWrite(0, this));
           routeMidi();
 
         // Send the actual "Note Off" message
@@ -795,7 +801,7 @@ void loadSettingsFrom(T *file) {
   resetSettings();
 
   while(file->available()) {
-    while(file->available() && (file->peek() == ' ' || file->peek() == '\r' || file->peek() == '\n'))
+    while(file->available() && (file->peek() == ' ' || file->peek() == '\r' || file->peek() == '\n' || file->peek() == '\t'))
       file->read(); // Skip leading spaces
 
     key = file->readStringUntil(':');
@@ -814,6 +820,8 @@ void loadSettingsFrom(T *file) {
       to = getOutputByName(value.c_str());
       if(from != -1 && to)
         mux = inputs[from]->createRoute(to);
+      else
+        mux = NULL;
     } else if(key == "FILTER") {
       int mask = 0;
       if(value.length() == 32) {
@@ -877,13 +885,16 @@ void loadSettings() {
   }
 
   // Load failed
-  for(int i = 0; i < inputCount; ++i)
+  for(int i = 0; i < inputCount; ++i) {
     // Default profile: route all inputs to the first output
-    inputs[i]->createRoute(outputs[0]);
+    // This allows using this as a midi merger by default
+    MidiRoute *r = inputs[i]->createRoute(outputs[0]);
+    r->setFilter(~0);
+  }
 }
 
 void routeMidi() {
-  if(sysExSource && sysExTarget && sysExSource->available() && sysExTarget->availableForWrite(sysExSource)) {
+  if(sysExSource && sysExTarget && sysExSource->available() && sysExTarget->availableForWrite(0, sysExSource)) {
     // Transmitting a sysEx file
     sysExTarget->write(sysExSource->read(), sysExSource);
     if(sysExSource->eof()) {
@@ -935,7 +946,7 @@ void routeRepeater() {
       midi1.MidiOut::write(b, NULL);
   }
     
-    if(midiMux4.available()) {
+  if(midiMux4.available()) {
     b = midiMux4.read();
     if(repeater != 2)
       midiMux4.MidiOut::write(b, NULL);
@@ -1069,8 +1080,8 @@ void setup() {
       pinMode(PB15, INPUT_PULLUP);
       delay(10);
       if(digitalRead(PB14) && digitalRead(PB15)) {
-        repeater = digitalRead(PA1) ? 3 : 1;
-        if(digitalRead(PA0))
+        repeater = digitalRead(PB12) ? 3 : 1;
+        if(digitalRead(PB13))
           ++repeater;
       }
     }

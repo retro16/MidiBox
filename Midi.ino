@@ -36,6 +36,9 @@ int MidiTracker::extraBytes() const {
 }
 
 void MidiTracker::track(byte b) {
+  if(realtime(b))
+    return;
+
   if(b & 0x80) {
     // Handle command bytes
     lastMessage = b;
@@ -68,14 +71,19 @@ void MidiTracker::reset() {
   state = NONE;
 }
 
-int MidiOut::availableForWrite(void *source) const {
-  if(currentSource == NULL || currentSource == source || millis() - sourceReserveMillis > sourceTimeout)
+int MidiOut::availableForWrite(byte b, void *source) const {
+  if(currentSource == NULL || currentSource == source || millis() - sourceReserveMillis > sourceTimeout || MidiTracker::realtime(b))
     return availableForWrite();
 
   return 0;
 }
 
 void MidiOut::write(byte b, void *source) {
+  // Realtime message shortcut
+  if(MidiTracker::realtime(b)) {
+    write(b);
+    return;
+  }
   // Don't repeat useless message headers
   byte lastMessage = tracker.lastMessage;
   tracker.track(b);
@@ -105,12 +113,6 @@ void MidiRoute::reset() {
   resetProcessing();
 }
 
-void MidiRoute::reset(MidiOut *newOut) {
-  reset();
-  out = newOut;
-  filter = ~0;
-}
-
 void MidiRoute::resetProcessing() {
   processing = 0;
   for(int c = 0; c < 16; ++c)
@@ -130,8 +132,11 @@ int MidiRoute::availableForWrite() const {
 }
 
 void MidiRoute::route(byte b) {
-  if(!filter)
+  if(MidiTracker::realtime(b)) {
+    if(filtered(b))
+      buffer.writeHead(b);
     return;
+  }
 
   tracker.track(b);
 
@@ -205,7 +210,7 @@ void MidiRoute::route(byte b) {
 
 void MidiRoute::write() {
   // Flush the buffer into the output
-  while(buffer.available() && out->availableForWrite(this)) {
+  while(buffer.available() && out->availableForWrite(buffer.peek(), this)) {
     out->write(buffer.read(), this);
 
     // Leave opportunities for other outputs to interleave messages
@@ -373,6 +378,7 @@ MidiRoute * MidiIn::createRoute(MidiOut *out) {
       // Add a route
       inRoutes[inRouteCount] = r;
       ++inRouteCount;
+      routes[r].reset();
       routes[r].out = out;
       return &routes[r];
     }
@@ -492,10 +498,21 @@ byte MidiUSBPort::read() {
 }
 
 int MidiUSBPort::availableForWrite() const {
-  return usb_midi_is_transmitting() ? 6 : 0;
+  return usb_midi_is_transmitting() ? 0 : 6;
 }
 
 void MidiUSBPort::write(byte b) {
+  if(MidiTracker::realtime(b))
+  {
+    MIDI_EVENT_PACKET_t rtPacket;
+    rtPacket.cable = cableId;
+    rtPacket.cin = CIN_1BYTE;
+    rtPacket.midi0 = b;
+    rtPacket.midi1 = 0;
+    rtPacket.midi2 = 0;
+    usb_midi_tx((uint32*)&rtPacket, 1); // Send packet
+    return;
+  }
   if(tracker.sysex()) {
     // Processing system exclusive
     outPacket.cin = CIN_SYSEX;
@@ -719,6 +736,12 @@ int MidiLoopback::availableForWrite() const {
 }
 
 void MidiLoopback::write(byte b) {
+  // Short circuit realtime messages.
+  if(MidiTracker::realtime(b)) {
+    buffer.writeHead(b);
+    return;
+  }
+
   buffer.write(b);
 }
 
@@ -756,6 +779,12 @@ int MidiParaphonyMapper::getNextChannel(int channel) {
 }
 
 void MidiParaphonyMapper::write(byte b) {
+  // Short circuit realtime messages.
+  if(MidiTracker::realtime(b)) {
+    buffer.writeHead(b);
+    return;
+  }
+
   byte message = tracker.message();
 
   if(tracker.allNotesOff()) {
